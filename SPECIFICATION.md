@@ -2506,6 +2506,19 @@ utils is struct "./lib/utils"       // resolves to ./lib/utils.uzon
 explicit is struct "./data.uzon"    // used as-is
 ```
 
+**Path canonicalization**: After resolving the relative path against the importing file's directory and appending `.uzon` if needed, the evaluator **MUST** canonicalize the result to a **physical absolute path** before using it for circular import detection or diamond import deduplication. Canonicalization **MUST** include: (1) converting to an absolute path, (2) resolving `.` and `..` segments, and (3) resolving symbolic links to their physical target. Two import paths that refer to the same physical file **MUST** produce the same canonical path, regardless of how the paths are written in source. Implementations that compare raw or partially resolved path strings will fail to detect circular imports and diamond duplicates when different relative paths (e.g., `"./shared"` from one directory and `"../shared"` from a subdirectory) or symbolic links refer to the same file.
+
+```
+// Example: both resolve to the same physical file
+// project/main.uzon
+shared is struct "./shared"           // → /project/shared.uzon
+
+// project/sub/config.uzon
+shared is struct "../shared"          // → /project/shared.uzon
+
+// Canonical paths are equal → diamond dedup applies
+```
+
 ### 7.2 File as Struct
 
 A UZON file evaluates to a struct containing all of its top-level bindings. There is no distinction between an inline struct and an imported file — both are structs.
@@ -2526,9 +2539,9 @@ label is shared.name       // "shared config"
 // shared is { array is [ 1, 2, 3 ], name is "shared config" }
 ```
 
-Circular file imports are **forbidden**.
+Circular file imports are **forbidden**. Cycle detection **MUST** use canonical paths (§7.1) — two imports form a cycle if their canonical paths are equal, regardless of how the relative paths are written in source.
 
-**Diamond imports**: When the same file is imported through multiple paths (e.g., A imports B and C, both of which import D), the evaluator **MUST** deduplicate by resolved file path. Only one copy of D exists in the namespace tree. Since name resolution does not cross file boundaries (§7.3), deduplication is always safe — the shared file behaves identically regardless of who imports it.
+**Diamond imports**: When the same file is imported through multiple paths (e.g., A imports B and C, both of which import D), the evaluator **MUST** deduplicate by canonical file path (§7.1). Only one copy of D exists in the namespace tree. Since name resolution does not cross file boundaries (§7.3), deduplication is always safe — the shared file behaves identically regardless of who imports it.
 
 > **Convention — exporting a single value.** A UZON file is always an anonymous struct (§7.2). This means a file cannot directly be a list, string, or other non-struct value — a bare `[1, 2, 3]` at the top level is **not** valid UZON. To export a single value, wrap it in a binding. Any binding name is valid, but `_` is recommended by convention as it clearly signals that the binding exists only as a wrapper:
 >
@@ -2579,7 +2592,7 @@ theme is struct "./theme"
 
 This file-boundary isolation ensures that a file's behavior is identical whether it is imported or used standalone — it never depends on who imports it or in what order. This also makes diamond imports (where multiple files import the same dependency) safe: since the shared file cannot see any importer's scope, deduplication produces consistent results regardless of import order.
 
-Evaluation **MUST** follow this order: (1) parse all files and recursively process all `struct` imports, (2) deduplicate files by resolved path, (3) resolve all identifier references within each file's own scope.
+Evaluation **MUST** follow this order: (1) parse all files and recursively process all `struct` imports, (2) deduplicate files by canonical path (§7.1), (3) resolve all identifier references within each file's own scope.
 
 ---
 
