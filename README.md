@@ -4,7 +4,7 @@
 
 UZON is a configuration and data language that combines the simplicity of JSON with the expressiveness of a typed language. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion.
 
-- **Specification Version**: 0.8 (Pre-release)
+- **Specification Version**: 0.9 (Pre-release)
 - **File Extension**: `.uzon`
 - **MIME Type**: `application/uzon`
 - **Encoding**: UTF-8
@@ -17,7 +17,8 @@ epoch is 7
 longitude is -117.8531 as f64
 latitude is 33.6694 as f64
 
-season is autumn from spring, summer, autumn, winter called Season
+Season is enum spring, summer, autumn, winter
+season is autumn as Season
 
 base_telescope is {
     aperture_mm is 200 as u16
@@ -41,9 +42,9 @@ active_scope is if seeing_conditions < 1.0
 
 | Feature                     | Description                                                                  |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| **Human-first syntax**      | English-like keywords (`is`, `from`, `called`, `as`, `to`, `named`)          |
+| **Human-first syntax**      | English-like keywords (`is`, `from`, `called`, `as`, `to`, `named`, `enum`)  |
 | **Rich type system**        | Primitives, structs, tuples, lists, enums, unions, tagged unions, functions  |
-| **Named & reusable types**  | Define types with `called`, reuse with `as`                                  |
+| **Named & reusable types**  | Declare via `enum`/`struct`/`union` or `called`, reuse with `as`             |
 | **Conditional expressions** | `if`/`then`/`else` and `case`/`when`                                         |
 | **Arithmetic & logic**      | `+`, `-`, `*`, `/`, `%`, `^`, `and`, `or`, `not`                             |
 | **Lexical name resolution** | Bare identifiers resolve via the scope chain — no prefixes needed            |
@@ -98,8 +99,8 @@ The full language specification is in [SPECIFICATION.md](SPECIFICATION.md). It c
 2. **Typed** — Rich primitive and compound types with named type reuse.
 3. **Cross-language** — Clean mapping to any mainstream programming language.
 4. **Expressive** — Conditionals, arithmetic, name references, and environment variables enable dynamic configuration.
-5. **Human-first** — English-like keywords for readability.
-6. **Minimal** — No redundant syntax; every construct earns its place.
+5. **Human-first** — English-like keywords (`is`, `from`, `called`, `as`, `to`, `named`, `enum`, `tagged`, `struct`, `union`) for readability.
+6. **Minimal** — Concise syntax; every construct earns its place.
 
 ## Links
 
