@@ -31,7 +31,7 @@ The specification is organized as follows:
 - **§10**: File format metadata
 - **§11**: Conformance and error handling
 - **Appendix A**: Complete example
-- **Appendix B**: Comparison with JSON, TOML, YAML
+- **Appendix B**: Comparison with JSON, TOML, YAML, Jsonnet, CUE, and Dhall
 - **Appendix C**: Keyword and operator quick reference
 - **Appendix D**: Implementer's quick reference
 - **Appendix E**: Style guide
@@ -48,7 +48,7 @@ The specification is organized as follows:
 
 UZON is a typed, human-readable data expression format. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion. At its simplest, UZON is a data format — bindings associate names with values using the `is` keyword, and nothing more is needed. At its most expressive, UZON supports conditional expressions, name references, environment variable access, arithmetic, struct overrides and extensions, type declarations, file imports, functions, and a standard library of collection and numeric utilities. Everything in UZON is a value: integers, strings, structs, lists, enums, tagged unions, and functions are all first-class values that can be bound, passed, and composed.
 
-A UZON file is an **anonymous struct**: a sequence of **bindings** at the top level. Each binding associates a name with a value using the `is` keyword. For a comparison with JSON, TOML, and YAML, see Appendix B.
+A UZON file is an **anonymous struct**: a sequence of **bindings** at the top level. Each binding associates a name with a value using the `is` keyword. For a comparison with JSON, TOML, YAML, Jsonnet, CUE, and Dhall, see Appendix B.
 
 ### 1.1 Design Goals
 
@@ -75,7 +75,7 @@ UZON uses English words as operators. The type-related keywords have strictly se
 | `enum`  | **Type declaration** (enum)        | "this is an **enum** type"           | `RGB is enum red, green, blue`   |
 | `union` | **Type declaration** (union)       | "this is a **union** type"           | `Flexible is union i32, string`  |
 | `tagged union` | **Type declaration** (tagged union) | "this is a **tagged union** type" | `Result is tagged union ...` |
-| `struct` | **Type declaration** (struct) / **Import** | "this is a **struct** type" / "import a file" | `Point is struct { ... }` |
+| `struct` | **Type declaration** (struct) / **Import** | "this is a **struct** type" / "import a file" | `Point is struct { ... }` / `cfg is struct "./config"` |
 
 `as` declares what a value already **is** — it does not change the value. If the value does not fit, it is an error. `to` transforms a value into a different representation — truncation, parsing, and format changes are expected. `of` extracts a field using the binding's own name as the key. `with` creates a new struct by overriding fields of an existing struct. `plus` creates a new struct by extending an existing struct with additional fields. `from` defines variants inline as part of a value expression. Standalone type declarations use `enum`, `union`, `tagged union`, or `struct` directly — the binding name becomes the type name. Note: UZON has several multi-token constructs. Six are **lexer-level composite tokens** emitted as single tokens: `or else`, `is not`, `is named`, `is not named`, `is type`, `is not type` (see §9 lexer rules). Three are **parser-level composites** formed from separate keyword tokens: `tagged union`, `case type`, `case named` (see §9 grammar productions).
 
@@ -900,7 +900,7 @@ Using both `tagged union` and `called` in the same expression is a **syntax erro
 
 **Tagged union type identity**: Named tagged union types follow **nominal identity** — two separately named tagged union types with the same variant set are different types. Anonymous tagged unions are **structurally** identical if they have the same variant names and variant types (order irrelevant).
 
-For examples of tagged unions in complex contexts — as struct fields, in lists, with `with` overrides, and with `case named` dispatch — see Appendix A.
+For an example of tagged union dispatch with `if`/`is named` chains in a realistic configuration, see Appendix A. The conformance test suite's `parse/valid/starship/` scenario exercises tagged unions as struct fields, in lists, and with `case named` dispatch (§11.3).
 
 Syntax (inline):
 
@@ -1389,7 +1389,7 @@ g is 1 is 0       // 1 == 0 → false, so g is false
 h is 1 is 1       // 1 == 1 → true, so h is true
 ```
 
-**Disambiguation rule**: The first `is` in a binding statement is always assignment. Subsequent `is` within the value expression are equality tests. **Chaining equality operators is forbidden** — `a is b is c`, `x is type i32 is type string`, `y is named ok is named err` are all **syntax errors**. Use parentheses or logical operators to make intent explicit.
+**Disambiguation rule**: The first `is` in a binding statement is always assignment. Subsequent `is` within the value expression are equality tests. At most **one** equality `is` (or `is not`) is permitted per expression — a second equality `is` constitutes chaining, which is a **syntax error**. This means `x is 1 is 1` has three `is` tokens: the first is assignment, the second is the single permitted equality, and the result is `x = true`. But `y is 1 is 1 is 1` has four `is` tokens: assignment + two equalities = chaining = syntax error.
 
 ```uzon
 x is 1 is 1             // x = (1 is 1) → x = true  — OK (one equality)
@@ -1684,8 +1684,8 @@ The left operand is a string or list; the right operand **MUST** be a non-negati
 **Precedence note**: `**` shares the same precedence level as `*`, `/`, `%` (Level 8, left-associative). When `**` and `*` appear in the same expression without parentheses, left-to-right grouping applies, which will typically result in a type error due to mismatched operand types. Use parentheses to clarify intent:
 
 ```uzon
-"*" ** 3 + 1         // ("***") + 1 → type error — use "*" ** (3 + 1) for "****"
-2 * "*" ** 3         // (2 * "*") ** 3 → type error — use "*" ** (2 * 3) for "******"
+"*" ** 3 + 1         // ("***") + 1 → type error — to build 4 asterisks, write "*" ** (3 + 1)
+2 * "*" ** 3         // (2 * "*") ** 3 → type error — to build 6 asterisks, write "*" ** (2 * 3)
 "*" ** 3             // "***" — no ambiguity when used alone
 ```
 
@@ -1746,9 +1746,11 @@ p is case 5 % 3
 Syntax:
 
 ```
-case <expression>          { when <value> then <expression> }  else <expression>
-case type <expression>     { when <type> then <expression> }   else <expression>
-case named <expression>    { when <tag> then <expression> }    else <expression>
+case <expression>          <when clauses>+  else <expression>
+case type <expression>     <when clauses>+  else <expression>
+case named <expression>    <when clauses>+  else <expression>
+
+where each when clause is:  when <value/type/tag> then <expression>
 ```
 
 The `else` branch is required. At least one `when` clause is also required — a `case` with no `when` is a syntax error. `when` values are tested in order; the first match wins. Duplicate `when` values (e.g., `when 1 then ... when 1 then ...`) are **permitted** — the second clause is dead code and never reached. Implementations **SHOULD** emit a warning for duplicate `when` values. The `case` expression and all `when` values **MUST** be the same type, with the same exception as `is` (§5.2): `null` is always permitted regardless of type. Note that `undefined` in `when` position is a **type error** — `undefined` is not a matchable value (§4.5). Separately, if the `case` scrutinee expression itself evaluates to `undefined` at runtime, this is a **runtime error** (§3.1) — `undefined` cannot be matched against any `when` clause.
@@ -2121,7 +2123,7 @@ debug is _raw is "true" or _raw is "1" or _raw is "yes"
 
 ### 5.14 Field Extraction (`of`)
 
-The `of` keyword in binding position extracts a field from a struct using the binding's own name as the lookup key. `a is of b` is equivalent to `a is b.a`.
+The `of` keyword in binding position extracts a field from a struct using the binding's own name as the lookup key. `a is of b` is equivalent to `a is b.a`. The expression after `of` is restricted to member access — operators (`or else`, `as`, arithmetic) cannot be combined with `of` (see below for details and workarounds).
 
 ```uzon
 _startup is struct "./startup"
@@ -2165,7 +2167,7 @@ port is config.port
 
 ### 5.15 Function Call
 
-A function is called using parentheses. The opening `(` **MUST** appear on the same line as the callee expression — if `(` appears on the following line, it is parsed as a new expression (tuple or grouping), not a function call. This prevents ambiguity between function calls and tuple literals across line boundaries. The arguments are positional and **MUST** match the function's parameter types in order. The argument count **MUST** be between the number of required parameters (those without `default`) and the total parameter count. Function application is parsed as a postfix operation at the same precedence as member access (level 1) and may be interleaved with it — see the `call_or_access` production in §9.
+A function is called using parentheses. The opening `(` **MUST** appear on the same line as the callee expression — if `(` appears on the following line, it is parsed as a new expression (tuple or grouping), not a function call. This prevents ambiguity between function calls and tuple literals across line boundaries. The arguments are positional and **MUST** match the function's parameter types in order. The argument count **MUST** be between the number of required parameters (those without `default`) and the total parameter count. If any argument evaluates to `undefined`, it is a **runtime error** for user-defined functions (§3.1); `std` functions propagate `undefined` per §5.16. Function application is parsed as a postfix operation at the same precedence as member access (level 1) and may be interleaved with it — see the `call_or_access` production in §9.
 
 ```uzon
 add is function a as i32, b as i32 returns i32 { a + b }
@@ -2681,7 +2683,7 @@ q is struct "./mod1"
 r is q.array ++ [ 4, 5 ]
 ```
 
-The path is a string literal, resolved relative to the importing file's location. Absolute paths (e.g., `"/etc/config"`) are **permitted** by the grammar but implementations **MAY** reject them with a **runtime error** for security reasons (see sandbox policy below). The path **MUST** be a non-interpolated string — interpolation in import paths is a syntax error, because import resolution occurs before expression evaluation. If the last component of the path does not contain a `.` character, the evaluator **MUST** automatically append `.uzon` and resolve accordingly. If the path already contains a `.` in the last component (e.g., `"./data.uzon"`, `"./my.config"`), it is used as-is.
+The path is a string literal, resolved relative to the importing file's location. Absolute paths (e.g., `"/etc/config"`) are **permitted** by the grammar but **SHOULD NOT** be used in portable documents — implementations **MAY** reject them with a **runtime error** for security reasons. Implementations that accept or reject absolute paths **MUST** document their policy (e.g., in release notes or security documentation) so that users can predict behavior across environments. The path **MUST** be a non-interpolated string — interpolation in import paths is a syntax error, because import resolution occurs before expression evaluation. If the last component of the path does not contain a `.` character, the evaluator **MUST** automatically append `.uzon` and resolve accordingly. If the path already contains a `.` in the last component (e.g., `"./data.uzon"`, `"./my.config"`), it is used as-is.
 
 ```uzon
 shared is struct "./shared"         // resolves to ./shared.uzon
@@ -3015,6 +3017,8 @@ struct_expr     = "struct" , ( string | struct_literal ) ;
 (* === Literals === *)
 literal         = integer | float | multiline_string
                 | "true" | "false" | "null" ;
+                  (* multiline_string with zero continuations is a single-line
+                     string — there is no separate single_string production. *)
 
 integer         = [ "-" ] , ( hex_int | oct_int | bin_int | dec_int ) ;
 dec_int         = DIGIT , { ( "_" , DIGIT ) | DIGIT } ;
@@ -3305,7 +3309,7 @@ Good: Line 5: 'port' needs a number, but you gave it a text value ("8080").
 
 **Error propagation**: If a binding's expression produces an error (e.g., division by zero, overflow, invalid conversion), the error propagates **transitively** to any binding that directly or indirectly references it. For example, if `a is 1/0` (runtime error), then `b is a + 1` and `c is b * 2` both produce the same error. The evaluator **MUST** report the original error location (the division by zero in `a`), not the reference sites (`b` or `c`). Circular dependency detection takes priority over expression evaluation — the evaluator **MUST** detect and report cycles before attempting to evaluate any expressions.
 
-**Error priority**: When multiple error conditions apply, implementations **MUST** prioritize in this order: (1) syntax errors (parsing — includes lexer errors such as unmatched quotes, invalid escape sequences, and invalid UTF-8), (2) circular dependency errors (static analysis), (3) type errors (type checking), (4) runtime errors (evaluation — overflow, division by zero, invalid conversion).
+**Error priority**: When multiple error conditions apply, implementations **MUST** prioritize in this order: (1) syntax errors (parsing — includes lexer errors such as unmatched quotes, invalid escape sequences, and invalid UTF-8), (2) circular dependency errors (static analysis), (3) type errors (type checking), (4) runtime errors (evaluation — overflow, division by zero, invalid conversion, undefined reaching a terminal context, file I/O failures during import, and other evaluation failures; see §3.1, §5.3, §7.1 for specific cases).
 
 ```uzon
 a is 1 / 0               // error: division by zero
@@ -3578,30 +3582,93 @@ binary_flags is 0b1010_0101
 permissions is 0o755
 ```
 
-## Appendix B: UZON vs JSON vs TOML vs YAML
+## Appendix B: UZON vs Other Formats and Configuration Languages
 
-| Feature                  | UZON | JSON | TOML | YAML |
-| ------------------------ | ---- | ---- | ---- | ---- |
-| Comments                 | ✓    | ✗    | ✓    | ✓    |
-| Trailing commas          | ✓    | ✗    | Arrays only | N/A  |
-| Typed enums              | ✓    | ✗    | ✗    | ✗    |
-| Unions / tagged unions   | ✓    | ✗    | ✗    | ✗    |
-| Tuples                   | ✓    | ✗    | ✗    | ✗    |
-| Named/reusable types     | ✓    | ✗    | ✗    | ✗    |
-| Conditional expressions  | ✓    | ✗    | ✗    | ✗    |
-| Arithmetic expressions   | ✓    | ✗    | ✗    | ✗    |
-| Functions                | ✓    | ✗    | ✗    | ✗    |
-| Standard library         | ✓    | ✗    | ✗    | ✗    |
-| Self-references          | ✓ (named bindings) | ✗    | ✗    | ✓ (anchors/aliases) |
-| Environment variables    | ✓    | ✗    | ✗    | ✗    |
-| File imports             | ✓    | ✗    | ✗    | ✗    |
-| Type conversions         | ✓    | ✗    | ✗    | ✗    |
-| Case expressions         | ✓    | ✗    | ✗    | ✗    |
-| Self-describing          | ✓    | ✓    | ✓    | ✗    |
-| Integer bases (hex etc.) | ✓    | ✗    | ✓    | ✓    |
-| String/list concat       | ✓    | ✗    | ✗    | ✗    |
-| String interpolation     | ✓    | ✗    | ✗    | ✗    |
-| Field extraction         | ✓    | ✗    | ✗    | ✗    |
+This appendix compares UZON with both **data formats** (JSON, TOML, YAML) and **configuration languages** (Jsonnet, CUE, Dhall). UZON sits between these categories — expressive enough for templating and typed configuration, yet deliberately less powerful than general-purpose config languages.
+
+Legend: ✓ full support, ◐ partial or limited support, ✗ not supported, N/A not applicable, **ext** via external tooling only.
+
+### B.1 Data Format Basics
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| Comments                      | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
+| Trailing commas               | ✓    | ✗    | arrays | N/A | ✓      | ✓   | ✓     |
+| Integer bases (hex/oct/bin)   | ✓    | ✗    | ✓    | ✓    | ✗       | ✓   | ✗     |
+| Multiline strings             | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
+| String interpolation          | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Unicode identifiers           | ✓    | N/A  | ✗    | ✓    | ✗       | ✗   | ✗     |
+| Self-describing (keys visible in source) | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓     |
+
+### B.2 Data Types
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| Static type declarations      | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓     |
+| Named/reusable types          | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓     |
+| Enums                         | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ◐ (unions) |
+| Untagged unions               | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✗     |
+| Tagged unions (sum types)     | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✓     |
+| Tuples (heterogeneous, fixed-length) | ✓ | ✗ | ✗ | ✗    | ✗       | ✗   | ✗     |
+| Sized integers (i8, u32 etc.) | ✓    | ✗    | ✗    | ✗    | ✗       | ◐   | ✗     |
+| Distinct null vs undefined    | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✗     |
+| Optional / nullable values    | ✓    | ◐    | ✗    | ✓    | ✓       | ✓   | ✓     |
+
+### B.3 Expressions and Logic
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| Arithmetic                    | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Conditionals (if/then/else)   | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Case / pattern dispatch       | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ◐ (merge) |
+| String/list concatenation     | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Type conversion               | ✓    | ✗    | ✗    | ✗    | ◐       | ✓   | ◐     |
+| Membership testing (`in`)     | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✗     |
+| Field extraction shorthand    | ✓ (`of`) | ✗ | ✗ | ✗   | ✗       | ✗   | ✗     |
+
+### B.4 Computation and Safety
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| User-defined functions        | ✓    | ✗    | ✗    | ✗    | ✓       | ✗   | ✓     |
+| Standard library (built-ins)  | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Recursion (direct or mutual)  | ✗    | N/A  | N/A  | N/A  | ✓       | ✗   | ✗     |
+| Turing-complete               | ✗    | ✗    | ✗    | ✗    | ✓       | ✗   | ✗     |
+| Termination guaranteed        | ✓    | ✓    | ✓    | ✓    | ✗       | ✓   | ✓     |
+| Pure evaluation (no side effects) | ✓ | N/A | N/A | N/A | ✓       | ✓   | ✓     |
+| Deterministic output          | ✓    | ✓    | ✓    | ◐    | ✓       | ✓   | ✓     |
+
+### B.5 Composition
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| Struct override (same fields) | ✓ (`with`) | ✗ | ✗ | ◐ (anchors) | ✓ (`+`)   | ✓ (unification) | ✓ (`⫽`) |
+| Struct extension (new fields) | ✓ (`plus`) | ✗ | ✗ | ◐       | ✓       | ✓   | ✓     |
+| Forward references (any order) | ✓   | ✗    | ✗    | ◐    | ✓       | ✓   | ✓     |
+| Inheritance / mixins          | ✗    | ✗    | ✗    | ◐    | ✓       | ✓   | ✗     |
+| Self-references (within doc)  | ✓ (named bindings) | ✗ | ✗ | ✓ (anchors) | ✓ | ✓ | ✓ |
+
+### B.6 Integration and Validation
+
+| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| File imports                  | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Hermetic imports (content-addressed) | ✗ | N/A | N/A | N/A | ✗     | ✗   | ✓     |
+| Environment variables         | ✓ (`env`) | ✗ | ✗ | ✗ | ◐ (ext vars) | ✓ | ✓     |
+| Schema validation             | ✓ (type system) | ext | ext | ext | ✗ | ✓ | ✓     |
+| Constraint refinements (e.g., `>0`, regex) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗     |
+| Default values                | ✓ (function params) | ✗ | ✗ | ✗ | ◐   | ✓   | ✗     |
+
+### B.7 Positioning
+
+UZON occupies a specific point in the design space:
+
+- **Against JSON/TOML/YAML**: UZON trades strict data-only simplicity for typed schema, templating, and environment integration — while preserving the human-readability and self-describing structure that makes these formats popular.
+- **Against Jsonnet**: UZON is intentionally non-Turing-complete — no recursion, guaranteed termination. This makes every UZON document verifiable in bounded time, at the cost of losing some templating power.
+- **Against CUE**: UZON does not use unification semantics. CUE's power comes from value/type unification and constraint refinement, which UZON deliberately avoids in favor of a conventional structural type system with sum types and functions.
+- **Against Dhall**: UZON lacks hermetic content-addressed imports and the formal totality guarantees of System Fω. In exchange, UZON offers a more lightweight syntax aimed at config authors rather than functional programmers, plus tagged unions with transparent arithmetic, sized integers, and a practical standard library.
+
+The core UZON thesis: **a data format with just enough expressiveness to eliminate the "config generator language + YAML output" pattern, without becoming a programming language.** Functions exist only to enable `std.map`/`filter`/`reduce`; recursion is forbidden; imports are path-based but non-hermetic; types are nominal and structural in conventional senses. Every UZON document is a finite value that can be read as data.
 
 ## Appendix C: Keyword and Operator Quick Reference
 
@@ -3807,8 +3874,6 @@ Functions are **values** — they follow the same binding rules as all other val
 ## Appendix E: Style Guide (Non-normative)
 
 This appendix provides recommended conventions for writing readable, consistent UZON documents. These guidelines are non-normative — documents that deviate from them are still valid UZON. The conventions are designed for teams sharing configuration files across projects and environments.
-
-This appendix provides recommended conventions for writing consistent, readable UZON documents. These guidelines are not enforced by parsers — they are recommendations for teams and projects.
 
 ### E.1 Naming
 
