@@ -46,7 +46,7 @@ The specification is organized as follows:
 
 ## 1. Introduction
 
-UZON is a typed, human-readable data expression format. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion. At its simplest, UZON is a data format — bindings associate names with values using the `is` keyword, and nothing more is needed. At its most expressive, UZON supports conditional expressions, name references, environment variable access, arithmetic, struct overrides and extensions, type declarations, file imports, functions, and a standard library of collection and numeric utilities. Everything in UZON is a value: integers, strings, structs, lists, enums, tagged unions, and functions are all first-class values that can be bound, passed, and composed.
+UZON is a typed, human-writable configuration language. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion. At its simplest, UZON reads like a data format — bindings associate names with values using the `is` keyword, and nothing more is needed. At its most expressive, UZON supports conditional expressions, name references, environment variable access, arithmetic, struct overrides and extensions, type declarations, file imports, functions, and a standard library of collection and numeric utilities. Everything in UZON is a value: integers, strings, structs, lists, enums, tagged unions, and functions are all first-class values that can be bound, passed, and composed.
 
 A UZON file is an **anonymous struct**: a sequence of **bindings** at the top level. Each binding associates a name with a value using the `is` keyword. For a comparison with JSON, TOML, YAML, Jsonnet, CUE, and Dhall, see Appendix B.
 
@@ -1039,7 +1039,7 @@ f is function returns string {
 
 **Function body as scope layer**: A function body forms its own scope layer in the scope chain, consistent with structs. Both parameters and intermediate bindings defined with `is` are part of this scope. Function bodies only support `is` bindings — `are` (list shorthand) and `called` (type naming) are not permitted inside function bodies. Use `is` with list literals and `as` with type annotations instead. When a nested struct is defined inside a function body, identifiers inside that struct resolve by walking: struct scope → function body scope (parameters + local bindings) → enclosing scope → file scope. The same applies to `with`/`plus` override blocks inside a function body — local bindings and parameters are visible in the override expressions.
 
-**Return types**: A function **MUST** declare its return type via the `returns` clause — there is no return type inference. This is a deliberate design choice: UZON functions are values in a data format, and explicit return types ensure that every function's interface is self-documenting without requiring evaluation. A function may return any UZON type, including another function. The `returns` clause accepts any valid type expression. Functions that return functions are permitted and follow normal DAG call graph rules.
+**Return types**: A function **MUST** declare its return type via the `returns` clause — there is no return type inference. This is a deliberate design choice: UZON functions are values in a configuration language, and explicit return types ensure that every function's interface is self-documenting without requiring evaluation. A function may return any UZON type, including another function. The `returns` clause accepts any valid type expression. Functions that return functions are permitted and follow normal DAG call graph rules.
 
 ```uzon
 x is 99
@@ -2666,7 +2666,7 @@ A is struct { b is {} as B }
 B is struct { a is {} as A }
 ```
 
-UZON is a data expression format — every value must be finite and fully representable. Recursive types would require infinite expansion to produce a default value, which contradicts UZON's evaluation model. To represent tree-like or self-referential data, use flat representations (e.g., adjacency lists with integer IDs) instead.
+UZON is a configuration language where every value must be finite and fully representable. Recursive types would require infinite expansion to produce a default value, which contradicts UZON's evaluation model. To represent tree-like or self-referential data, use flat representations (e.g., adjacency lists with integer IDs) instead.
 
 Cross-file mutual type references (where TypeA in file A references TypeB in file B and vice versa) are impossible without circular imports — and circular imports are forbidden (§7.2). If both types are needed together, define them in the same file or in a common shared file.
 
@@ -3584,7 +3584,7 @@ permissions is 0o755
 
 ## Appendix B: UZON vs Other Formats and Configuration Languages
 
-This appendix compares UZON with both **data formats** (JSON, TOML, YAML) and **configuration languages** (Jsonnet, CUE, Dhall). UZON sits between these categories — expressive enough for templating and typed configuration, yet deliberately less powerful than general-purpose config languages.
+This appendix compares UZON with both **data formats** (JSON, TOML, YAML) and **configuration languages** (Jsonnet, CUE, Dhall). UZON is a configuration language, not a data format — but one designed to read as data at the simple end.
 
 Legend: ✓ full support, ◐ partial or limited support, ✗ not supported, N/A not applicable, **ext** via external tooling only.
 
@@ -3661,14 +3661,14 @@ Legend: ✓ full support, ◐ partial or limited support, ✗ not supported, N/A
 
 ### B.7 Positioning
 
-UZON occupies a specific point in the design space:
+UZON is a **typed configuration language**. It occupies a specific point in the design space:
 
-- **Against JSON/TOML/YAML**: UZON trades strict data-only simplicity for typed schema, templating, and environment integration — while preserving the human-readability and self-describing structure that makes these formats popular.
-- **Against Jsonnet**: UZON is intentionally non-Turing-complete — no recursion, guaranteed termination. This makes every UZON document verifiable in bounded time, at the cost of losing some templating power.
+- **Against JSON/TOML/YAML**: UZON is not a data format. It is a configuration language with a type system, templating primitives, and environment integration — while preserving the human-readability and self-describing structure that makes these formats popular. Use a data format when the output is consumed by machines without schemas; use UZON when the author is a human writing typed configuration.
+- **Against Jsonnet**: UZON is intentionally non-Turing-complete — no recursion, guaranteed termination. Every UZON document is verifiable in bounded time, at the cost of losing some templating power. Jsonnet is dynamically typed; UZON has nominal and structural type declarations.
 - **Against CUE**: UZON does not use unification semantics. CUE's power comes from value/type unification and constraint refinement, which UZON deliberately avoids in favor of a conventional structural type system with sum types and functions.
-- **Against Dhall**: UZON lacks hermetic content-addressed imports and the formal totality guarantees of System Fω. In exchange, UZON offers a more lightweight syntax aimed at config authors rather than functional programmers, plus tagged unions with transparent arithmetic, sized integers, and a practical standard library.
+- **Against Dhall**: UZON lacks hermetic content-addressed imports and the formal totality guarantees of System Fω. In exchange, UZON offers a more lightweight syntax aimed at configuration authors rather than functional programmers, plus tagged unions with transparent arithmetic, sized integers, and a practical standard library.
 
-The core UZON thesis: **a data format with just enough expressiveness to eliminate the "config generator language + YAML output" pattern, without becoming a programming language.** Functions exist only to enable `std.map`/`filter`/`reduce`; recursion is forbidden; imports are path-based but non-hermetic; types are nominal and structural in conventional senses. Every UZON document is a finite value that can be read as data.
+The core UZON thesis: **a typed configuration language that stays non-Turing-complete and reads as data at the simple end.** Functions exist only to enable `std.map`/`filter`/`reduce`; recursion is forbidden; imports are path-based but non-hermetic; types are nominal and structural in conventional senses. Every UZON document is a finite value — humans write it as configuration, and machines read it as data.
 
 ## Appendix C: Keyword and Operator Quick Reference
 
