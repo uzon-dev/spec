@@ -2,7 +2,7 @@
 
 **Version**: 0.10  
 **Status**: Pre-release  
-**Date**: 2026-04-19  
+**Date**: 2026-04-18  
 **Author**: Suho Kang  
 **Repository**: [github.com/uzon-dev](https://github.com/uzon-dev)  
 **Website**: [uzon.dev](https://uzon.dev)
@@ -138,6 +138,15 @@ Tokens that fully match a numeric literal grammar (§4.2, §4.3) are parsed as n
 
 Whitespace (space, tab) and newline characters (LF, CR) **MUST** terminate an unquoted identifier. The following ASCII punctuation also terminates or cannot appear within an unquoted identifier: `{ } [ ] ( ) , . " ' @ + - * / % ^ < > = ! ? : ; | & $ ~ # \` and `//`. This is not a soft guideline — these characters have fixed structural meaning in the grammar or are reserved for future use, and always act as token boundaries. To use these characters in a name, use a quoted identifier (e.g., `'Content-Type'`).
 
+**Unicode identifier policy** (normative):
+
+- **Whitespace** for identifier-termination purposes is the Unicode "White_Space" property set (includes space, tab, LF, CR, NBSP U+00A0, and other Unicode whitespace). Line separators U+2028 and U+2029 also terminate identifiers.
+- **Control characters** U+0000–U+001F and U+007F **MUST** be rejected with a **syntax error** when they appear in source (inside or outside identifiers), except for LF (U+000A), CR (U+000D), and HT (U+0009) which are whitespace. Implementations **MUST NOT** silently strip them.
+- **Zero-width joiners / non-joiners** (U+200C, U+200D) and **variation selectors** (U+FE00–U+FE0F, U+E0100–U+E01EF) within an unquoted identifier are treated as **part of that identifier** — they are non-whitespace and non-punctuation per this section's rules. `foo‍bar` (with ZWJ between `foo` and `bar`) is **one** identifier whose byte-identical form must appear at all reference sites.
+- **Normalization**: UZON performs **no Unicode normalization**. Identifiers are compared by byte-identical match of their UTF-8 encoding. A binding named `café` with composed `é` (U+00E9) is a **different** identifier from `café` with decomposed `e` + combining acute (U+0065 U+0301). Users are encouraged to write source in NFC, but the language does not enforce it. This choice keeps the parser simple and deterministic; the cost is that users must be consistent in normalization within their own files.
+- **RTL and bidi marks** (U+200E, U+200F, U+202A–U+202E, U+2066–U+2069) **MUST** be rejected as syntax errors outside string literals — they pose spoofing risks and have no legitimate use in UZON identifiers.
+- **Rationale for not adopting UAX #31**: UAX #31 (XID_Start / XID_Continue) restricts identifier start characters to Unicode letters. UZON deliberately allows digit-start (`1st`) and emoji-start (`😀`) identifiers because configuration documents legitimately use such names as map keys. The cost is that UZON cannot reuse existing UAX #31 tooling; the benefit is expressive freedom matched to the configuration domain.
+
 **Quoted identifiers**: An identifier that starts with `'` and ends with `'` may contain any characters between the quotes — including spaces, operators, and keywords. The enclosing quotes are part of the syntax, not the name: `'key'` and `key` refer to the same name. A quoted identifier **MUST** be closed by `'` on the same physical line — a newline or EOF before the closing `'` is a **syntax error**.
 
 **Keyword restriction**: Since `'key'` and `key` are the same name, `'is'` equals the keyword `is` — it is still a keyword, not an identifier. Quoted identifiers whose content matches a keyword cannot be used as binding names. To use a keyword as a binding name, use `@` escape (§2.4). Operator characters in quoted identifiers are permitted — `'+' is 1` is valid because `+` is not a keyword.
@@ -215,10 +224,7 @@ The following identifiers are reserved:
 "                        // string delimiter
 '                        // quoted identifier delimiter
 @                        // keyword escape
-//                       // line comment
 ```
-
-**Scope**: This table lists **symbolic** operators and punctuation only. UZON also has many **keyword** operators — including `is`, `is not`, `is named`, `is not named`, `is type`, `is not type`, `or else`, `and`, `or`, `not`, `in`, `to`, `with`, `plus`, `as`, `from`, `named`, `of`. See §2.5 for the full keyword list and §5.5 for the complete operator precedence table (which unifies symbolic and keyword operators).
 
 ---
 
@@ -241,7 +247,7 @@ The following identifiers are reserved:
 
 **Integer width semantics**: An `iN` or `uN` type can hold `2^N` distinct values. The exact ranges are: `uN` holds values `0` to `2^N - 1`; `iN` holds values `-2^(N-1)` to `2^(N-1) - 1` (two's complement). This formula holds uniformly for all `N` in the range, including `N = 0`: `u0` and `i0` are unit types holding exactly one value (`0`). Zero-width integers carry no information and are rarely useful in configuration, but they are permitted for consistency with the general integer type rule.
 
-**`null` vs `undefined`**: `null` is a value — it can be assigned to a binding to indicate "intentionally empty." `undefined` is not a value — it is a **state** that results from querying something that does not exist. The literal `undefined` is restricted to `is` / `is not` comparison operands — using it in any other syntactic position (binding RHS, `if`/`case` branches, function body final, operand of other operators, etc.) is a **type error** (§4.5). However, expressions that produce `undefined` (e.g., `missing`, `env.UNSET`) can be used freely — the `undefined` state flows through the dependency graph until it is either resolved by `or else` or reaches a terminal context where it becomes an error.
+**`null` vs `undefined`**: `null` is a value — it can be assigned to a binding to indicate "intentionally empty." `undefined` is not a value — it is a **state** that results from querying something that does not exist. The literal `undefined` cannot appear on the right side of `is` in a binding — this is a **type error** (§4.5). However, expressions that produce `undefined` (e.g., `missing`, `env.UNSET`) can — the `undefined` state flows through the dependency graph until it is either resolved by `or else` or reaches a terminal context where it becomes an error.
 
 ```uzon
 x is null          // valid — x exists, holds no value
@@ -261,7 +267,7 @@ The following table defines how `undefined` interacts with every operator:
 | `of` (field extraction)      | Propagates               | Consistent with `.` member access (§5.14)                        |
 | `to` (conversion)            | Propagates               | Enables `env.X to u16 or else 8080`                              |
 | `with`                       | Runtime error            | Shape preservation requires a concrete struct                    |
-| `plus`                       | Runtime error            | Extension requires a concrete struct                             |
+| `plus`                    | Runtime error            | Extension requires a concrete struct                             |
 | `as` (annotation)            | Propagates               | Type name is still validated; undefined value propagates         |
 | `or else`                    | Returns right operand    | Primary undefined resolution mechanism                           |
 | `is` / `is not`              | Permitted (returns bool) | Enables `x is undefined` checks                                  |
@@ -294,7 +300,7 @@ server is {
 
 Struct fields are accessed via dot notation: `star.name`.
 
-**Standalone type declaration** (`struct`): The `struct` keyword before a struct literal declares a named struct type. The binding name becomes the type name — no `called` is needed. The binding's value is the struct itself, and **the binding has the named type**. Subsequent bindings that copy the value (e.g., `origin is Point`) inherit the same named type — `origin` has nominal type `Point`, not an anonymous struct shape. This enables direct use in `as Point` checks, `with`/`plus` overrides, and typed-list contexts without re-adopting the name.
+**Standalone type declaration** (`struct`): The `struct` keyword before a struct literal declares a named struct type. The binding name becomes the type name — no `called` is needed. The binding's value is the struct itself.
 
 ```uzon
 Point is struct { x is 0 as i32, y is 0 as i32 }
@@ -343,8 +349,6 @@ Duplicate field names within a struct are a **syntax error**; parsers **MUST** r
 **Struct type identity**: Two anonymous struct types are the **same type** if and only if they have the same set of field names and each corresponding field has the same type — field order does not matter. Named struct types (via standalone `struct` declaration or `called`) follow **nominal identity** — two separately named struct types with identical field sets are different types (§3.2.1 rule 5). This is consistent with all other named types in UZON.
 
 **Field defaults** (named struct types only): When a struct type is declared via `struct` or `called`, each field's declared value serves as its **default**. Constructing a value of that named type — either with explicit `as TypeName` or in a type-context-inferred position (detailed below) — permits omitting fields that take the declared default. This allows declaring a struct type once with sensible defaults and building values that specify only the fields that differ.
-
-**Defaults that evaluate to `undefined`**: Field default expressions are ordinary expressions and are subject to `undefined` propagation (§3.1). If a default expression evaluates to `undefined` at runtime (e.g., `port is env.PORT` when `PORT` is unset), a construction site that omits that field produces a field value of `undefined`. No implicit `or else` is inserted; the `undefined` propagates per §3.1 from the field's use site onward. To supply a fallback, either write `port is env.PORT or else 8080` in the struct declaration, or override the field explicitly at the construction site.
 
 ```uzon
 Modifiers is struct {
@@ -486,31 +490,6 @@ base with { x is null }            // ✓ — null compatible (rule 3)
 
 **Exception for `null`**: `null` receives special treatment in `with` overrides. A field with value `null` (without explicit type annotation) may be overridden by a value of any type. Conversely, any typed field may be overridden with `null` to reset it to an empty state. This bidirectional `null` compatibility enables `null` as both a placeholder (type to be determined) and a reset mechanism (clear a previously set value). When the struct has a named type (via standalone declaration or `called`), the named type's field definitions take priority — a `null` field that was originally typed as `i32` in the named type can only be overridden with `i32` or `null`, not with an unrelated type like `string`.
 
-**Null-field override and per-instance field types**: When a named struct type declares a field as `null` **without explicit type annotation** (e.g., `flag is null` rather than `flag is null as i32`), the field is a **type-deferred placeholder**. Each construction site — whether via `with`, `plus`, or `as TypeName` conformance (§6.3) — independently chooses the underlying type of that field. Two instances of the same named struct type may therefore carry **different underlying types** at a deferred-null field without affecting their nominal identity. This is deliberate: the whole point of an untyped `null` placeholder is to defer the type decision to the use site.
-
-The consequence matters for **list homogeneity** (§3.4.2): a list of values of the same named struct type **is homogeneous** even when those values carry different underlying types at deferred-null fields — because list homogeneity uses the **nominal type** of each element (§3.4.2), and every element still has the same nominal type. The sparse-config idiom relies on this:
-
-```uzon
-Rule is struct {
-    name is ""
-    flag is null              // deferred-null field
-    data is null              // deferred-null field
-}
-
-rules is [
-    { name is "a", flag is true },                  // flag: bool
-    { name is "b", data is { key is 1 } },          // data: anonymous struct
-    { name is "c", flag is 42, data is "text" },    // flag: i64, data: string
-] as [Rule]
-// All three elements have nominal type Rule. Homogeneity holds.
-```
-
-Operators that inspect a deferred-null field's value behave per that field's **actual** underlying type at each instance — e.g., `rules.first.flag is type bool` is `true`, `rules.1.data is type string` is `false`. The `null` declaration in the type only constrains default behavior (field is `null` when omitted), not the set of types the field may hold across instances.
-
-The same rule applies **transitively** to nested named struct types — if `Rule.data` is declared as `data is null` and one instance sets `data is { a is 1, b is 2 }` while another sets `data is { a is 3 }`, the two inner anonymous structs may have **different shapes** and this is not an error. Each instance's `data` field independently adopts whatever type its use-site value has. List homogeneity on the outer list still holds via `Rule`'s nominal identity.
-
-Deferred-null fields **MUST NOT** be confused with **typed-null fields** (e.g., `x is null as i32`): a typed-null field has a fixed underlying type and can only be overridden with that type or `null`, per the rule above. The two forms are syntactically distinguished by the presence of `as TypeName` in the field declaration.
-
 ```uzon
 base is { api_key is null, port is 8080 as u16 }
 
@@ -541,7 +520,7 @@ good is base with { inner is base.inner with { a is 3 } }
 
 The override block in `with` is a struct literal evaluated in the **calling scope** — not inside the base struct's scope. Identifiers inside the override resolve using the normal lexical scope chain from where `with` appears — they cannot directly reference the base struct's existing fields. To compute an override value based on the original field, reference it via the base binding explicitly (e.g., `base with { port is base.port + 1 }`). Forward references to sibling bindings in the calling scope are permitted, consistent with §5.12. Chaining multiple `with` or `plus` operations (e.g., `a with {...} with {...}`, `a plus {...} plus {...}`, or `a with {...} plus {...}`) is not permitted — the grammar allows at most one `with` or `plus` per expression level. However, **parenthesized grouping** creates a new expression level — `(a with { x is 1 }) plus { y is 2 }` is valid because `a with { x is 1 }` is a complete expression inside parentheses, and `plus` operates on the result. Intermediate bindings are preferred for readability.
 
-**Value-copy semantics**: `with` operates on the **evaluated values** of the base struct, not its expressions. The base struct is fully evaluated first, then the override fields replace values in the copy. Expressions in non-overridden fields are not re-evaluated.
+**Value-copy semantics (normative)**: `with` operates on the **already-evaluated** base value — all derived fields in the base are computed once at base construction and **copied as values** into the result; they are **NOT** recomputed in terms of the overridden fields. For example, if `base is { r is 10.0, area is r * r * 3.14 }` (so `base.area` evaluates to `314.0`), then `base with { r is 20.0 }` produces `{ r is 20.0, area is 314.0 }` — **not** `{ r is 20.0, area is 1256.0 }`. Users who want recomputation must either (1) override the derived field explicitly (`base with { r is 20.0, area is 20.0 * 20.0 * 3.14 }`), or (2) use a function that constructs a fresh struct from parameters. This rule also applies to `plus` (§3.2.2). This choice matches UZON's declarative, one-shot evaluation model — bindings are immutable values, not spreadsheet-style reactive formulas.
 
 ```uzon
 base is { x is 1, y is x + 10 }
@@ -795,7 +774,7 @@ The full set of named ordinals:
 | `ninth`   | 8     |
 | `tenth`   | 9     |
 
-Accessing an index beyond the length of the list or tuple evaluates to `undefined` — this includes accessing any index on an empty list `[]` or empty tuple `()` (e.g., `[].0` → `undefined`, `[].first` → `undefined`). This is consistent with struct field access — accessing a nonexistent name also yields `undefined` (§5.12). Negative indices are not supported — they are treated as out-of-bounds and evaluate to `undefined`. More generally, if a member accessor does not apply to the value's type (e.g., a numeric index on a struct, or a non-ordinal name on a list), the result is `undefined` — consistent with any other unresolved member access. **Two exceptions** (per §5.12): member access on `null` and on **function values** is a **type error**, not `undefined` — the type checker rejects these at the access site.
+Accessing an index beyond the length of the list or tuple evaluates to `undefined` — this includes accessing any index on an empty list `[]` or empty tuple `()` (e.g., `[].0` → `undefined`, `[].first` → `undefined`). This is consistent with struct field access — accessing a nonexistent name also yields `undefined` (§5.12). Negative indices are not supported — they are treated as out-of-bounds and evaluate to `undefined`. More generally, if a member accessor does not apply to the value's type (e.g., a numeric index on a struct, or a non-ordinal name on a list), the result is `undefined` — consistent with any other unresolved member access.
 
 **Rationale.** UZON provides two forms of element access for lists and tuples:
 
@@ -837,15 +816,13 @@ secondary is blue as RGB
 
 Both forms produce the same type. Standalone `enum` is preferred for type definitions where the selected value is not important; inline `from` + `called` is preferred when a specific initial value matters. Using both `enum` and `called` in the same expression is a **syntax error**.
 
-An inline `from` clause **without** `called` produces a value whose type is an **anonymous enum** — useful when the enum doesn't need to be referenced by name elsewhere (e.g., `status is ok from ok, warn, err`).
-
 **Enum type identity**: Named enum types follow **nominal identity** — two separately named enum types with the same variant set are different types. Anonymous enums (without a name via standalone declaration or `called`) are **structurally** identical if they have the same variant set (order irrelevant).
 
-**Variant resolution**: Bare identifiers in expression position resolve as **bindings** via the lexical scope chain (§5.12). Enum variants are resolved in specific type-context positions where the enum type is determinable. The same positions enable tagged union variant shorthand (§3.7), with distinct surface syntax — see §3.7 for the full treatment. Resolution depends on the position: in the **explicit variant positions** (rules 1–3 below), bare identifiers **always** resolve as variants regardless of any same-name binding in scope — these positions are structurally committed to variant semantics (a binding reference would be meaningless or a type error). In the **type-context inference positions** (rule 4), bindings win over variants — if a bare identifier matches both a binding in scope and a variant of the inferred enum type, the binding is chosen (use `as EnumType` to force variant resolution).
+**Variant resolution**: Bare identifiers in expression position resolve as **bindings** via the lexical scope chain (§5.12). Enum and tagged union variants are resolved in specific contexts where the type is determinable. Resolution depends on the position: in the **explicit variant positions** (rules 1–3 below), bare identifiers **always** resolve as variants regardless of any same-name binding in scope — these positions are structurally committed to variant semantics (a binding reference would be meaningless or a type error). In the **type-context inference positions** (rule 4), bindings win over variants — if a bare identifier matches both a binding in scope and a variant of the inferred enum type, the binding is chosen (use `as EnumType` to force variant resolution).
 
 1. **`from` clauses** — identifiers after `from` are always variants.
 2. **`as EnumType`** — a bare identifier immediately before `as EnumType` resolves as a variant of that type.
-3. **`case`/`when`** — bare identifiers in `when` clauses resolve as variants of the `case` scrutinee's enum or tagged union type (for `case` / `case named`), or as type names (for `case type`). See §5.10.
+3. **`case`/`when`** — bare identifiers in `when` clauses resolve as variants of the `case` scrutinee's enum type (§5.10).
 4. **Type-context inference** — when the expected type from context is a named enum type, a bare identifier matching a variant of that type resolves as that variant. Type context propagates through:
    - **List element type** via `as [EnumType]`.
    - **`if`/`case` branch unification** — when one branch fixes the type.
@@ -855,9 +832,36 @@ An inline `from` clause **without** `called` produces a value whose type is an *
    - **Struct field value** — when the containing struct has a named type and the field's declared type is an enum, bare variant names are resolved to that enum. See example below.
    - **Function argument** — when a function parameter has an enum type, a bare variant name in the argument position resolves to that variant.
    - **Function return value** — when a function's return type is an enum, the final expression in the function body may use a bare variant name.
-   - **Binding RHS with explicit type annotation** — `x is red as Color`, `xs is [red, green, blue] as [Color]`, etc. — the variant name(s) adopt the annotation's enum type.
+   - **Binding RHS with explicit type annotation** — `x is red as Color`, `x is red as [Color]` etc. — the variant name adopts the annotation's enum type.
 
 > ⚠ **Gotcha — Rule 4 reverses the rules 1–3 default.** In the rule-4 type-context inference positions above, **bindings win over variants** (as stated in this section's opening). This is the opposite of rules 1–3, where variants win unconditionally. The practical consequence: if you declare a binding like `red is 1` and then write a struct field of enum type `Color` with value `red`, the field resolves to the binding `1` (a type error against the `Color` field type), not to the variant `Color.red`. To force variant resolution when a same-name binding is in scope, write `red as Color` explicitly. This asymmetry is deliberate — rules 1–3 are structurally committed to variant semantics (a binding would be nonsensical there), while rule-4 positions could legitimately use either a binding or a variant, so the lexical scope wins to preserve local-reasoning intuition.
+
+**Worked example — Rule 1-3 vs Rule 4 collision**:
+
+```uzon
+RGB is enum red, green, blue
+red is 99            // binding shadows variant name
+
+// Rule 1 (from clause) — variant wins unconditionally
+fav is green from red, green, blue    // `red`, `green`, `blue` all variants
+
+// Rule 2 (as EnumType) — variant wins
+primary is red as RGB                 // variant RGB.red (NOT binding 99)
+
+// Rule 3 (case when) — variant wins
+label is case primary
+    when red then "warm"              // variant RGB.red (NOT binding 99)
+    when green then "cool"
+    else "other"
+
+// Rule 4 (struct field with named enum type) — BINDING WINS
+Palette is struct { accent is green as RGB }
+p is { accent is red } as Palette     // `red` resolves to binding 99
+                                      // → type error: 99 (i64) not assignable to RGB
+
+// Rule 4 override — use `as RGB` to force variant resolution
+p2 is { accent is red as RGB } as Palette   // valid — variant RGB.red
+```
 
 Outside these contexts, a bare identifier is always a binding reference — there is no global variant search. Within a rule-4 context the inferred type is a single type, so ambiguity between two unrelated enums cannot arise directly. The ambiguity case appears when the inferred type is a **union containing multiple enums** that share a variant name — e.g., a field declared as `union Color, Fruit` where both `Color` and `Fruit` declare a `red` variant. A bare `red` in that field position is **ambiguous** and is a **syntax error** — use `as Color` or `as Fruit` to disambiguate. The parser **SHOULD** suggest the matching types in the error message (e.g., "ambiguous variant `red` — matches `Color.red` and `Fruit.red`; use `red as Color` or `red as Fruit`"). The same rule applies to rules 1–3 if a scrutinee or annotation could ambiguously resolve a bare identifier to variants of multiple visible enums.
 
@@ -879,7 +883,7 @@ active_config is {
 
 If the same `Config` struct is built without `as Config` annotation (anonymous struct), the bare variant names have no type context — `as Color` is required.
 
-**Tagged union variant shorthand**: For tagged union variants with non-null inner types, the shorthand takes the form `variant_name inner_value` (e.g., `pressed "q"`). For nullary variants (inner type `null`), the bare `variant_name` suffices and resolves to `null named variant_name`. Both forms rely on the type-context inference positions listed above. See §3.7 for the complete shorthand syntax, precedence, and examples.
+**Tagged union variant shorthand** (see §3.7 for full treatment): The same resolution applies to tagged union variant names when the target type is known from context. A bare `variant_name` resolves to `null named variant_name` when the target variant is nullary (inner type `null`); for variants with non-null inner types, the shorthand `variant_name inner_value` produces the tagged union value directly. Both forms rely on the type-context inference positions listed above. See §3.7 for the complete shorthand syntax, precedence, and examples.
 
 ```uzon
 layouts is {
@@ -901,20 +905,7 @@ layouts is {
 3. **`called`** — the `called` keyword explicitly closes the enum and names the type.
 4. **End of expression** — a closing delimiter (`}`, `)`, `]`) or EOF.
 
-This comma-lookahead rule reuses the same 2-token pattern as NEWLINE_SEP, but with two differences: the trigger (`,` instead of newline), and the **scope** — comma-lookahead matches only within the **same line** (the two tokens after `,` must both precede any newline), whereas NEWLINE_SEP's lookahead crosses the newline and skips blank lines (§9 line separator rules). If a comma is followed only by an identifier and then a newline, rule 2 does **not** fire on the post-newline tokens — that situation falls through to rule 1 (NEWLINE_SEP on the next non-blank line). Keywords like `named` and `from` are not treated as binding starts, so they are consumed as variants when they appear after `,`. The exception is `called`, which always closes the enum (rule 3) — use `@called` to include it as a variant name.
-
-**Variant name / binding name collision — two cases**:
-
-*Case A — inline (same line, triggers rule 2)*: When a new binding starts on the same line as the variant list, the 2-token comma lookahead terminates the variant list. Example: `{ color is red from red, size is 10 }` — after `red,`, the parser sees `size is` (2 tokens matching the pattern), so rule 2 fires and terminates the variant list after `red` (1 variant → rejected as < 2). To include a same-line binding whose name matches a keyword or an intended variant, use `called` to close the variant list explicitly: `{ color is red from red, green called Color, size is 10 }`.
-
-*Case B — next line (triggers rule 1, produces a different error)*: When a variant name coincidentally matches the **outer binding's own name** and that name reappears on the next line, the variant list completes normally (rule 2 does **not** fire because the tokens after `,` within the line are just an identifier followed by NEWLINE, not `identifier is/are`). Rule 1 (NEWLINE_SEP) then terminates the `from` expression, and the next line starts a new binding. The actual error is a **duplicate binding**, not a variant-count failure. Example:
-
-```uzon
-size is active from active, size   // variant list parses as (active, size), 2 variants — OK
-size is 10                          // ERROR: duplicate binding `size`
-```
-
-To avoid this, rename either binding, or use `called` to terminate the variant list explicitly: `size is active from active, size called SizeMode`.
+This comma-lookahead rule reuses the same 2-token pattern as NEWLINE_SEP — the only difference is the trigger (`,` instead of newline). Keywords like `named` and `from` are not treated as binding starts, so they are consumed as variants when they appear after `,`. The exception is `called`, which always closes the enum (rule 3) — use `@called` to include it as a variant name. **Variant name / binding name collision**: When a variant name coincidentally matches the next binding name, the 2-token lookahead terminates the variant list. For example, `size is active from active, size` followed by `size is 10` on the next line — the lookahead sees `size is` and terminates after `active` (1 variant → rejected as < 2). To avoid this, use `called` to explicitly close the enum: `size is active from active, size called SizeMode`. The `called` keyword unambiguously terminates the variant list regardless of what follows.
 
 Similarly, bindings with keyword names on the following line (e.g., `@true is 5`) require `@` escape — without it, the keyword is consumed as a variant because NEWLINE_SEP only triggers for non-keyword identifiers.
 
@@ -942,11 +933,11 @@ green is 1
 e is green from red, green, blue   // green = variant, not the binding (1)
 ```
 
-### 3.6 Untagged Union
+### 3.6 Union
 
-An untagged union holds a value whose type is one of several possible types, without an explicit discriminator tag. An untagged union can be declared standalone (`Flexible is union i32, string`) or inline with a value (`u is 3.14 from union i32, f64, string`). In the inline form, the `union` keyword after `from` distinguishes it from an enum.
+A union holds a value whose type is one of several possible types. A union can be declared standalone (`Flexible is union i32, string`) or inline with a value (`u is 3.14 from union i32, f64, string`). In the inline form, the `union` keyword after `from` distinguishes it from an enum.
 
-An untagged union **MUST** have at least two member types — a single-type union is equivalent to a type annotation and carries no useful information.
+A union **MUST** have at least two member types — a single-type union is equivalent to a type annotation and carries no useful information.
 
 **Standalone type declaration** (`union`): The `union` keyword declares a named union type directly. The binding name becomes the type name. The binding's value is the **default value of the first member type**, determined as follows:
 
@@ -958,18 +949,14 @@ An untagged union **MUST** have at least two member types — a single-type unio
 | `bool` | `false` |
 | `null` | `null` |
 | List (`[T]`) | `[] as [T]` |
-| Tuple (`(T1, T2, ...)`) | `(default(T1), default(T2), ...)` — each element's default from this table; empty tuple `()` yields `()` |
+| Tuple | `()` (empty tuple) |
 | Named enum | First variant |
 | Named struct | Struct with each field's value from its declaration |
-| Named tagged union | First variant's inner type default (per this table) with first tag |
-| Named union | First member type's default (per this table, recursively) |
+| Named tagged union | First variant's default with first tag |
 | Function | **Not permitted** — type error |
+| Union (nested) | **Not permitted** — type error |
 
-**On nested anonymous unions**: `union` is **not** a `type_expr` (§9) — it appears only at the top of a declaration (standalone `X is union ...`) or inline after `from` (`value from union ...`). It is never a member of any type expression: it cannot nest inside another `union` declaration, inside a tuple/list type, or as a variant type in a tagged union. So a form like `Outer is union (union i32, string), bool` fails to parse at the first member-type position — the inner `union i32, string` is rejected as a non-`type_expr` before any nesting semantics come into play. The "Named union" row above covers the only way a union appears as a member type: by reference to a named union.
-
-The tuple row is **recursive**: a tuple type's default is the tuple of each element's default, looked up in the same table. Nested tuples unfold to any depth.
-
-If the first member type is `function`, or a tuple whose recursive default construction fails (any element's type is itself `function`, transitively), the standalone declaration is a **type error** — use inline `from union` with an explicit value instead. The same transitive rule applies to any compound type whose default construction recurses into such a failing case.
+If the first member type is `function` or a nested anonymous union, the standalone declaration is a **type error** — use inline `from union` with an explicit value instead.
 
 ```uzon
 Flexible is union i32, string
@@ -1027,7 +1014,7 @@ Ordered comparison (`<`, `<=`, `>`, `>=`) on untagged union values is a **type e
 
 **Untagged union and `to`**: The `to` operator is governed by the conversion table (§5.11.0), not by general transparency. Only `to string` is permitted for untagged unions — all other target types are type errors. This is consistent with tagged union `to` behavior (§3.7.1).
 
-#### 3.6.1 Enum vs Untagged Union vs Tagged Union Disambiguation
+#### 3.6.1 Enum vs Union vs Tagged Union Disambiguation
 
 **Standalone declarations** use distinct keywords — no ambiguity:
 
@@ -1062,7 +1049,7 @@ Result is tagged union ok as string, err as string
 r is "success" as Result named ok   // reuse the Result type
 ```
 
-**Default value strategies across standalone declarations**: Enum defaults to the first variant **name** (the variant itself is the value). Tagged union defaults to the first variant's **inner type default** with the first variant's tag. Untagged union defaults to the first member **type's default** (§3.6 table). Struct defaults to the struct with each field's declared value. This variation reflects each type's nature — enum values are names, tagged union values are tagged wrappers around inner values.
+**Default value strategies across standalone declarations**: Enum defaults to the first variant **name** (the variant itself is the value). Tagged union defaults to the first variant's **inner type default** with the first variant's tag. Union defaults to the first member **type's default** (§3.6 table). Struct defaults to the struct with each field's declared value. This variation reflects each type's nature — enum values are names, tagged union values are tagged wrappers around inner values.
 
 **Inline declaration** (`named` + `from` + `called`): The traditional syntax combines a value, tag selection, and type declaration:
 
@@ -1098,7 +1085,26 @@ c is {
 e3 is cleared as Event           // null named cleared
 ```
 
-The shorthand sits at the `primary` grammar production (§9) — it binds tighter than every expression-level operator, including `as`, `to`, `with`, `plus`, `named`, and all arithmetic/comparison/logical operators. (`primary` is a grammar production, not a precedence level; the tightest precedence level — level 1 in §5.5, member access and function call — operates on primaries.) The inner value expression that follows the variant name is parsed as a `primary` (not a full expression). Any primary form is valid without parentheses — this includes literals, identifiers, list literals, struct literals, tuple literals, nested variant shorthands, `if`/`case` expressions, function literals, and standalone type declarations (`enum`/`union`/`tagged union`/`struct`). Parentheses are required **only** when the inner value uses an expression-level operator such as `+`, `++`, `and`, `or`, `as`, `to`, `with`, `plus`, `named`, or any comparison — e.g., `pressed (prefix ++ suffix)`, `pressed (value as Type)`. Forms like `pressed if cond then "a" else "b"` and `pressed function n as i32 returns i32 { n + 1 }` parse **without** parentheses because `if_expr` and `function_expr` are themselves primaries.
+The shorthand is a **primary expression** (§5.5, level 1) — it binds tighter than `as`, `to`, `with`, `plus`, `named`, and all arithmetic/comparison operators. The inner value expression that follows the variant name is parsed as a `primary` (not a full expression), so compound expressions must be parenthesized: `pressed (prefix ++ suffix)`, `pressed (if cond then "a" else "b")`. Simple literals, identifiers, list literals, struct literals, tuple literals, and nested variant shorthands may appear without parentheses.
+
+**Nested inner-type context propagation**: When a variant shorthand's target variant has an inner type that is itself a named enum or tagged union, that inner type becomes the **type context** for the inner expression. This cascades recursively. For example, given:
+
+```uzon
+Direction is enum forward, reverse
+Action is tagged union move as string, focus as Direction, close as null
+Event is tagged union pressed as string, dispatch as Action
+
+ev is dispatch focus reverse as Event
+```
+
+Resolution proceeds outward-to-inward:
+1. `dispatch focus reverse as Event` — outer variant `dispatch` of `Event`; inner type is `Action`.
+2. Inside the shorthand, `focus reverse` is parsed with type context `Action`. Inner variant is `focus`, whose inner type is `Direction`.
+3. Inside that shorthand, `reverse` is parsed with type context `Direction`. Resolves to `Direction.reverse`.
+
+The type context is **established at each layer** by the resolved variant's declared inner type. An implementation performing this cascade correctly must, during shorthand resolution, thread the inner type down as the context for the next primary. This rule enables concise nested tagged-union literals without per-level `as` annotations.
+
+If the inner expression is not a bare variant name — e.g., it's a struct literal, tuple, or another expression — the same type context applies normally (struct field inference per §3.5, list element inference via `as [T]`, etc.). The propagated context is not consumed: it remains available for any rule-4 position within the inner expression.
 
 When both the binding name and a variant name could match, the binding always wins — use the full form or `as EnumType` style disambiguation if needed. If the variant shorthand is ambiguous between multiple tagged union types in context, it is a **syntax error**; use the full form to disambiguate.
 
@@ -1118,7 +1124,9 @@ When a tagged union is used as a value, it evaluates to its **inner value** tran
 
 **Transparency exceptions**: The following operators see the tagged union wrapper, not the inner value: `is` / `is not` (compare both tag and inner value — §3.7.2), `is named` / `is not named` (check tag), `case named` (match tag in `case`), `in` (same comparison semantics as `is` — §5.8.1), `to` (conversion applies to the tagged union as a unit — §5.11.0), `as` (type annotation must match the tagged union type — §6.1), `or else` (checks whether the tagged union value itself is `undefined` — §5.7), and `with`/`plus` (requires a struct, not a tagged union — apply to the inner struct explicitly). All other operators see the inner value — binary arithmetic (`+`, `-`, `*`, `/`, `%`), unary negation (`-`), exponentiation (`^`), concatenation (`++`), repetition (`**`), comparison with non-tagged-union values (`<`, `<=`, `>`, `>=`), logical `and`/`or`/`not`, and string interpolation. **Binding** (`is` as assignment) is not an operator — it preserves the tagged union wrapper. To extract the inner value, use a transparent operator context: `tagged_val + 0` for numeric, `tagged_val ++ ""` for string. Member access (`.`) is transparent — `tagged_val.field` accesses the inner struct's fields, `tagged_val.0` accesses tuple elements, and `tagged_val.first` accesses list elements, all without extraction.
 
-**Nested tagged unions**: Transparency applies recursively. If a tagged union's inner value is itself a tagged union, transparent operators unwrap each layer until a non-tagged inner value is reached. `to string` also recurses — when the inner value is itself a tagged union, the conversion continues through all wrapper layers; the resulting string is the innermost non-tagged value's string representation (§5.11.2). The variant tags along the way are **not** included in the output (tag lossiness — see below).
+**Transparency classification rule (future-safe)**: An operator is **wrapper-seeing** (a transparency exception) if and only if it inspects or depends on the **tag** (the variant identity) rather than only the inner value. All current exceptions satisfy this rule: `is`/`is not`/`in` compare tag + inner value; `is named`/`is not named`/`case named` inspect the tag directly; `to`/`as` are type-directed and the tagged union type is the unit of classification; `or else` checks undefined-ness of the wrapped value (not the inner); `with`/`plus` require a struct shape and a tagged union wrapper is not a struct. Any future operator added to UZON is **value-seeing by default** unless it inspects the tag, in which case it **MUST** be explicitly declared a transparency exception in the introducing spec revision and added to this list. This rule prevents accidental inheritance of value-transparency by operators that should be tag-aware.
+
+**Nested tagged unions**: Transparency applies recursively. If a tagged union's inner value is itself a tagged union, transparent operators unwrap each layer until a non-tagged inner value is reached.
 
 *Note on `to` and tagged unions*: Because `to` sees the wrapper, conversions are governed by the tagged union row in the conversion table (§5.11.0). Only `to string` is permitted — it extracts the inner value and converts it to string per §5.11.2. The variant tag is **not** included in the string representation — `"error" named err to string` and `"error" named ok to string` both produce `"error"`. This means `to string` is lossy for tagged unions and cannot be used for round-trip serialization. UZON's own syntax is the round-trip format; `to string` is for display and debugging. All other target types (`to i32`, `to f64`, etc.) are type errors. To convert a tagged union's inner value to a non-string type, extract it via a transparent operator first (e.g., `inner is tu + 0` for numeric, `inner is tu ++ ""` for string), then apply `to`.
 
@@ -1162,8 +1170,6 @@ summary is case named health
 Using `is named` or `is not named` on a value that is not a tagged union is a type error. If the name after `named` is not a valid variant of the tagged union type, the evaluator **MUST** report a type error. In `case named` expressions, **all** `when` clauses **MUST** be validated against the tagged union's variant list, regardless of which clause matches — consistent with the speculative evaluation rule (§5.9).
 
 **Comparing a tagged union with a non-tagged-union value** using `is` or `is not` is a type error — they are different types. Exception: comparing against `null` or `undefined` is always permitted (§5.2), consistent with the universal null/undefined comparison rule. Since `is`/`is not` are transparency exceptions (§3.7.1), the wrapper is not unwrapped for comparison. To compare the inner value, extract it via a transparent operator first (e.g., `inner is tu + 0` for numeric, `inner is tu ++ ""` for string), then compare `inner`.
-
-> **Note — tagged vs untagged asymmetry**: This behavior differs from **untagged** union comparison (§3.6). An untagged union compared against a non-union value uses **transparency** — the inner value is compared directly, so `u is 5` where `u is union i32, string` unwraps and compares `5` to the inner. A tagged union compared against a non-tagged-union value is a **type error** because the tag is semantically meaningful and cannot be silently discarded. This asymmetry is deliberate: untagged unions are a convenience for holding one of several types (the runtime type is the value's identity), whereas tagged unions deliberately distinguish "same inner type, different tags" as different values.
 
 ```uzon
 message is "hello"
@@ -1281,7 +1287,7 @@ connect("example.com")                // "http://example.com:8080"
 connect("example.com", 443, true)    // "https://example.com:443"
 ```
 
-The default value expression is evaluated in the **enclosing scope** — not inside the function body. Since all UZON bindings are immutable and `env` is constant for the duration of evaluation, the default expression produces the same value whether evaluated once at function definition time or at each call site — implementations **MAY** use either strategy. Identifier references in default expressions resolve against the scope where the function is defined. A default expression **MUST NOT** reference any parameter of the same function — this is a **type error** (a name-resolution check performed during type checking, with the parameter list in hand). Parameters are not in scope until the function body begins. The default value's type **MUST** match the parameter's declared type — a type mismatch (e.g., `port as u16 default "8080"`) is a **type error**. The untyped literal adoption rule (§5) applies — `port as u16 default 8080` is valid because the literal `8080` adopts `u16`. `undefined` is not permitted as a default value — use an explicit sentinel value instead.
+The default value expression is evaluated in the **enclosing scope** — not inside the function body. Since all UZON bindings are immutable and `env` is constant for the duration of evaluation, the default expression produces the same value whether evaluated once at function definition time or at each call site — implementations **MAY** use either strategy. Identifier references in default expressions resolve against the scope where the function is defined. A default expression **MUST NOT** reference any parameter of the same function — this is a **syntax error**. Parameters are not in scope until the function body begins. The default value's type **MUST** match the parameter's declared type — a type mismatch (e.g., `port as u16 default "8080"`) is a **type error**. The untyped literal adoption rule (§5) applies — `port as u16 default 8080` is valid because the literal `8080` adopts `u16`. `undefined` is not permitted as a default value — use an explicit sentinel value instead.
 
 ```uzon
 x is 1
@@ -1499,6 +1505,21 @@ url is "http://localhost:{port}/api"
 
 The expression inside `{}` is evaluated and converted to its string representation. `null` is converted to the string `"null"` (per §5.11.2). `undefined` in interpolation is a **runtime error** — it is a terminal context (§3.1). Nested braces within the expression (e.g., struct literals) are allowed — the lexer **MUST** track brace depth to find the closing `}` of the interpolation, so that `"result: {{a is 1}.a}"` correctly parses the struct literal `{a is 1}` as part of the interpolation expression and closes the interpolation at the outermost `}`. The lexer **MUST** maintain a context stack to distinguish interpolation braces from struct literal braces and nested interpolation boundaries (string → interpolation → string → …). String literals within the interpolation (e.g., `"hello {"world"}"`) are handled naturally — the inner `"` opens a new string token inside the interpolation expression. There is no maximum nesting depth — implementations **MUST** support arbitrary nesting levels. An unmatched `{` (interpolation opened but never closed) or unmatched `}` inside a string is a **syntax error**. An empty interpolation `{}` (opening and closing brace with no expression) is also a **syntax error** — the grammar requires an expression inside interpolation braces.
 
+**Lexer algorithm (normative)**: To guide implementers, the following algorithm describes the required behavior precisely. Maintain a stack of lexer contexts; each context is one of `STRING`, `INTERPOLATION`, or `EXPR`. Start in `EXPR`. When lexing:
+
+1. In `EXPR` context: a `"` character opens a new string literal — push `STRING` context.
+2. In `STRING` context:
+   - `"` closes the current string — pop back to the underlying context.
+   - `\` begins an escape; consume the escape sequence per §4.4.
+   - `{` opens interpolation — push `INTERPOLATION` context with brace-depth counter initialized to 1; subsequent characters are lexed as `EXPR`-context tokens until brace-depth returns to 0.
+   - Other characters are ordinary string content.
+3. In `INTERPOLATION` context: lexing proceeds as in `EXPR`, but:
+   - Each `{` token encountered (e.g., a struct literal opener) **increments** the brace-depth counter.
+   - Each `}` token **decrements** the brace-depth counter; when the counter reaches 0, the `}` closes the interpolation and pops back to `STRING` context.
+   - A `"` inside the interpolation opens a nested string (push `STRING`); its `"` closer pops back to the `INTERPOLATION` context (which retains its brace-depth counter).
+
+This algorithm handles `"outer {{inner: "x"}.inner}"` (struct literal inside interpolation with nested string) by: open `STRING` → `{` opens `INTERPOLATION` (depth=1) → `{` increments (depth=2) → `inner: ` → `"` opens nested `STRING` → `x` → `"` pops back to `INTERPOLATION` (depth=2) → `}.inner` → first `}` decrements (depth=1) → second `}` decrements (depth=0) → pops back to outer `STRING` → closing `"`.
+
 Identifiers inside `{}` resolve via the normal scope chain (§5.12):
 
 ```uzon
@@ -1552,20 +1573,14 @@ a is null        // value intentionally absent — a exists but holds nothing
 
 **`null` operator compatibility**: `null` may be used as an operand for `is`, `is not` (§5.2), `or else` (§5.7), `in` (§5.8.1), `if`/`case` branch typing (§5.9, §5.10), and `with` override compatibility (§3.2.1). Using `null` with arithmetic (`+`, `-`, `*`, `/`, `%`, `^`), comparison (`<`, `<=`, `>`, `>=`), concatenation (`++`), repetition (`**`), or logical operators (`and`, `or`, `not`) is a type error. `null to string` produces `"null"` (§5.11.2); `null to null` is permitted (identity); `null to` any other type is a type error.
 
-`undefined` is **not** a value — it is a state returned by the runtime when accessing something that does not exist (unset environment variables, unbound names, out-of-bounds indices, missing fields). The **literal** `undefined` may appear **only** as an operand of `is` or `is not` comparisons (e.g., `x is undefined`, `y is not undefined`). Using the literal `undefined` anywhere else — as a binding RHS, in any `if`/`case` branch (`then`, `else`, `when`), as a function body's final expression, a struct field value, a list element, a function argument, or an operand of any other operator (including `or else`) — is a **type error**. **Expressions** that produce `undefined` at runtime (unresolved names, `env.UNSET`, out-of-bounds access, member access on undefined) are always permitted and propagate per §3.1. See §3.1 for the full propagation table and §11.2.1 for the error-classification entry.
+`undefined` is **not** a literal and cannot be assigned. It is a state returned by the runtime when accessing something that does not exist (e.g., an unset environment variable, or an unbound name in the scope chain). The literal `undefined` is primarily useful in comparison expressions (`x is undefined`). Using `undefined` as the right-hand side of a binding (`x is undefined`) is a **type error** — `undefined` is a state, not a value. See §3.1 for the full propagation table and §11.2.1 for the error-classification entry. In most other operator contexts, `undefined` produces an error — see the propagation table in §3.1 for details.
 
 ```uzon
 // valid — comparing against undefined
 port is if env.PORT is undefined then 8080 else env.PORT to u16
 
-// INVALID — literal undefined as binding RHS
-x is undefined   // error: literal undefined only allowed as is/is not operand
-
-// INVALID — literal undefined as if branch
-y is if c then 1 else undefined   // error: literal undefined in else branch
-
-// valid — expression producing undefined is fine
-z is if c then 1 else env.UNSET   // z is 1 or undefined (runtime)
+// INVALID — cannot assign undefined literal
+x is undefined   // error: undefined cannot be bound directly
 ```
 
 ---
@@ -1729,7 +1744,7 @@ Operator and suffix precedence (highest to lowest):
 | 3           | `with`, `plus`                             | Struct override / extension      | —      |
 | 4           | `as`                                       | Type annotation                  | —      |
 | 5           | `from`, `named`                            | Enum / Union / Tagged union      | —      |
-| —           | `called`                                   | Type naming (**binding level only** — not an expression operator) | —      |
+| *           | `called`                                   | Type naming (**binding level only** — not an expression operator) | —      |
 | 6           | `^`                                        | Exponentiation                   | right  |
 | 7           | unary `-`                                  | Negation                         | —      |
 | 8           | `*`, `/`, `%`, `**`                        | Multiplicative / Repetition      | left   |
@@ -1930,7 +1945,7 @@ Syntax:
 if <bool_expression> then <expression> else <expression>
 ```
 
-Both `then` and `else` branches are required. The condition **MUST** evaluate to a `bool`. There is no truthy/falsy coercion: `0`, `null`, `""`, and any other non-bool values are **not** treated as `false`. Using a non-bool value as a condition is a type error.
+Both `then` and `else` branches are required. The condition **MUST** evaluate to a `bool` — specifically, the literal values `true` or `false`. There is no truthy/falsy coercion: `0`, `null`, `""`, and any other non-bool values are **not** treated as `false`. Using a non-bool value as a condition is an error.
 
 Both branches **MUST** evaluate to the same type. Returning different types from different branches (e.g., `i32` from `then` and `string` from `else`) is a type error. The untyped literal adoption rule (§5) applies across branches — if one branch has a typed value and the other an untyped literal, the literal adopts the typed branch's type (e.g., `if c then 5 as i32 else 5` is valid — the `else` branch's `5` adopts `i32`). As with `is`/`is not` (§5.2), `null` is compatible with any type — if one branch evaluates to a specific type `T` and the other to `null`, the expression is valid and the result type is `T` (not a union of `T` and `null`). `null` is simply a valid value of any type. This ensures that the result of an `if` expression has a single, unambiguous type — consistent with UZON's strong typing and cross-language mapping goals.
 
@@ -1946,23 +1961,21 @@ This strict rule also applies to `and`, `or`, and `not` — their operands **MUS
 
 **Evaluation semantics**: Only the selected branch is evaluated to produce the final result. However, implementations **MUST** speculatively evaluate all branches to determine their result types. Runtime errors (division by zero, overflow, invalid conversion) encountered in non-selected branches **MUST** be suppressed — only the result type is retained for type compatibility checking. This speculative evaluation is the mechanism by which UZON enforces type constraints without a separate static type system. The same mechanism applies to `case` (all `when` and `else` branches), `and`/`or` (short-circuit), and `or else` (right side).
 
+**Type-error detection depth**: Speculative evaluation of non-selected branches **MUST** walk the full expression tree of each branch, including recursive function call bodies, nested `if`/`case` branches, struct/tuple/list literals, and all operator applications — no short-circuiting for type-error detection is permitted. If a non-selected branch contains `f(g(h(x)))` and `g`'s return type does not match `f`'s parameter type, the type error **MUST** be reported even though `f` would never actually be called at runtime. This depth requirement is what enables UZON to type-check without a separate static type-inference pass. Runtime errors inside the same branch (e.g., `x / 0` where the walk also finds a type error elsewhere) are still suppressed in non-selected branches — only type errors propagate regardless of selection. Implementations that short-circuit type walking when a runtime error is first detected violate this requirement.
+
 ```uzon
 // safe — the error branch is never evaluated
 x is if true then 1 else (1 / 0)   // 1 — division by zero never reached
 ```
 
-**Branch narrowing**: When the condition of an `if` expression tests a property of the scrutinee, the scrutinee's type is narrowed in the corresponding branches. Each form below narrows symmetrically — the `then` and `else` roles swap when the predicate is negated:
+**Branch narrowing**: When the condition of an `if` expression tests a property of the scrutinee, the scrutinee's type is narrowed in the corresponding branches:
 
-- `if x is not undefined then ... else ...` — `x` is narrowed to its value type (excluding `undefined`) in the `then` branch; retains `undefined` as a possibility in `else`.
-- `if x is undefined then ... else ...` — swapped: `x` may be `undefined` in `then`; narrowed to its value type (excluding `undefined`) in `else`.
-- `if x is not null then ... else ...` — `x` is narrowed to its value type (excluding `null`) in the `then` branch. For union types that include `null` as a member type, `null` is removed from the narrowed union's member set. If the union has only two members and one is `null`, the narrowed type is the remaining member type (not a single-member union). In `else`, `x` is `null`.
-- `if x is null then ... else ...` — swapped: `x` is `null` in `then`; narrowed to exclude `null` in `else`.
+- `if x is not undefined then ... else ...` — `x` is narrowed to its value type (excluding `undefined`) in the `then` branch.
+- `if x is not null then ... else ...` — `x` is narrowed to its value type (excluding `null`) in the `then` branch. For union types that include `null` as a member type, `null` is removed from the narrowed union's member set. If the union has only two members and one is `null`, the narrowed type is the remaining member type (not a single-member union).
 - `if x is type T then ... else ...` — `x` is narrowed to `T` in the `then` branch. In the `else` branch, `x` is narrowed to the remaining types if `x` is a union; if `x` is not a union, the `else` branch retains the original type (the branch is logically unreachable when `T` is the value's only type, but still type-checks normally).
-- `if x is not type T then ... else ...` — swapped: `else` narrows `x` to `T`; `then` narrows `x` to the remaining types (or retains the original type if `x` is not a union).
-- `if x is named tag then ... else ...` — `x` is narrowed to the `tag` variant's inner type in the `then` branch. In `else`, `x` is narrowed to the tagged union's remaining variants.
-- `if x is not named tag then ... else ...` — swapped: `else` narrows `x` to the `tag` variant's inner type; `then` narrows `x` to the remaining variants.
+- `if x is named tag then ... else ...` — `x` is narrowed to the `tag` variant's inner type in the `then` branch.
 
-This narrowing follows the same rules as `case type` and `case named` narrowing (§5.10), applied to the two branches of `if`. Narrowing applies only to **simple conditions** — a single `is` / `is not` comparison against `undefined` or `null`, or a single `is type` / `is not type` / `is named` / `is not named` test, in every case on a **bare identifier**. Narrowing does not apply to member access paths (e.g., `if a.field is type T` does not narrow `a` or `a.field`), computed expressions, or compound conditions using `and`/`or`.
+This narrowing follows the same rules as `case type` and `case named` narrowing (§5.10), applied to the two branches of `if`. Narrowing applies only to **simple conditions** — a single `is type`, `is named`, `is not undefined`, or `is not null` test on a **bare identifier**. Narrowing does not apply to member access paths (e.g., `if a.field is type T` does not narrow `a` or `a.field`), computed expressions, or compound conditions using `and`/`or`.
 
 ### 5.10 Case Expression (`case` / `when` / `then` / `else`)
 
@@ -2050,16 +2063,6 @@ msg is case type u
 
 Narrowing applies to speculative evaluation (§5.9) — non-selected branches are type-checked against the narrowed type, not the original union type. Narrowing is a **type refinement** on the existing binding — it does not create a new binding or a new scope layer. The narrowed identifier refers to the same value, but the type checker treats it as the narrowed type within that branch. The `else` branch is narrowed to the **remaining types** — those not matched by any `when` clause. If all member types are covered by `when` clauses, the `else` branch is unreachable. It **MUST** still type-check: its expression's type **MUST** unify with the other branches' result type (or be `null`). Speculative evaluation does not suppress type errors in unreachable branches — consistent with D.5. Implementations **SHOULD** emit a warning when all member types (for `case type`) or all variants (for `case named`) are covered by `when` clauses, making the `else` branch unreachable. This means `u + 1` in the `when i32` branch is always valid, even if `u` is actually a `string` at runtime (the branch is not selected, and the narrowed type `i32` makes `+ 1` well-typed).
 
-**Narrowing is restricted to bare identifier scrutinees** — consistent with §5.9. A `case type config.port when i32 then ...` expression does **not** narrow `config.port` in the branch body; `config.port` retains its original (union) type. To obtain narrowing on a member-access path, bind it to a local identifier first:
-
-```uzon
-p is config.port
-msg is case type p
-    when i32 then "port: {p + 1}"    // p narrowed to i32
-    when string then "name: {p}"     // p narrowed to string
-    else "unknown"
-```
-
 **Variant dispatch** (`case named`): When a `case` expression needs to branch on the variant tag of a tagged union, use `case named`:
 
 ```uzon
@@ -2111,7 +2114,7 @@ case code
     else "error"
 ```
 
-*Keyword-as-variant edge case*: If an enum has a variant whose name is a keyword (e.g., `type`, `named`), use `@` escape in `when` clauses: `when @named then ...`. The `@` prefix is purely syntactic disambiguation — `@named` and `named` refer to the same variant name (consistent with §2.4: `@` is not part of the identifier itself). The same applies to binding decomposition: `x is named from ...` fails to parse because after `is`, the parser tries `named` as the head of a `variant_shorthand` (`variant_name , primary`), which then requires a `primary` to follow. `from` is not a `primary` — it is an expression suffix (like `called`, `with`, `plus`, `as`) — so the `variant_shorthand` parse fails, and `named` on its own is not a valid `primary` either (keywords are not admitted as bare `name` primaries). The whole RHS fails. Note that `x is named "v"` **does** parse successfully as a `variant_shorthand` (`variant_name = named`, `primary = "v"`) — only the `named from ...` and `named called T` shapes fail. Use `x is @named from ...` to make `@named` resolve as a bare `name` (identifier primary) that can then take the `from_clause` suffix normally.
+*Keyword-as-variant edge case*: If an enum has a variant whose name is a keyword (e.g., `type`, `named`), use `@` escape in `when` clauses: `when @named then ...`. The `@` prefix is purely syntactic disambiguation — `@named` and `named` refer to the same variant name (consistent with §2.4: `@` is not part of the identifier itself). The same applies to binding decomposition: `x is named from ...` decomposes to `x = (named from ...)` where `named` begins a named-clause; use `x is @named from ...` to select the variant `named`.
 
 ### 5.11 Type Conversion (`to`)
 
@@ -2170,9 +2173,9 @@ The following table defines **all** permitted `to` conversions. Any conversion n
 
 **Key rules**:
 
-- **Numeric → numeric**: Same category only. Integer ↔ integer: identity (same width, e.g., `i32 to i32`) is a no-op; widening (e.g., `i32 to i64`) is always valid; narrowing (e.g., `i64 to i32`) is range-checked — overflow is a runtime error. A negative signed integer converted to an unsigned type is a **runtime error** — there is no wrapping or absolute-value conversion (e.g., `-1 to u32` is invalid). Float ↔ float (precision change). Widening (e.g., `f32 to f64`) is lossless. Narrowing (e.g., `f64 to f32`) rounds to the nearest representable value using IEEE 754 round-to-nearest-even. If the value exceeds the target type's finite range, the result is `inf` or `-inf` (not a runtime error — consistent with float arithmetic overflow). Precision loss during narrowing is silent — no warning or error is raised. Integer → float: always permitted, but **not always lossless**. Large integers may exceed the target float's precision (e.g., `i64` values beyond 2^53 are not exactly representable in `f64`; `i32` values beyond 2^24 are not exact in `f32`; any `i32` above 2^11 is lossy in `f16`). Precision loss rounds to nearest representable float using IEEE 754 round-to-nearest-even; no error or warning is raised. If the integer exceeds the target float's finite range, the result is `inf` or `-inf`. Float → integer: the evaluator **MUST** first check for `inf` and `nan` — both are **runtime errors** (`inf` exceeds all finite ranges, `nan` has no integer representation). If the value is finite, the decimal part is truncated toward zero, then the result is range-checked against the target type (overflow is runtime error).
+- **Numeric → numeric**: Same category only. Integer ↔ integer: identity (same width, e.g., `i32 to i32`) is a no-op; widening within the same signedness (e.g., `i32 to i64`, `u32 to u64`) is always valid; narrowing within the same signedness (e.g., `i64 to i32`) is range-checked — overflow is a runtime error. **Cross-signedness conversions** at the same width (e.g., `i32 to u32`, `u32 to i32`) are **permitted** but **range-checked at runtime**: values outside the target type's representable range are runtime errors. For example, `-1 to u32` is a runtime error (negative); `(u32.MAX) to i32` is a runtime error (exceeds `i32.MAX`). There is no wrapping, two's-complement reinterpretation, or absolute-value coercion. **Cross-signedness widening** (e.g., `u32 to i64`, where all u32 values fit in i64) is valid and never fails; **cross-signedness narrowing** (e.g., `i64 to u32`) is range-checked. A negative signed integer converted to any unsigned type is always a runtime error. Float ↔ float (precision change). Widening (e.g., `f32 to f64`) is lossless. Narrowing (e.g., `f64 to f32`) rounds to the nearest representable value using IEEE 754 round-to-nearest-even. If the value exceeds the target type's finite range, the result is `inf` or `-inf` (not a runtime error — consistent with float arithmetic overflow). Precision loss during narrowing is silent — no warning or error is raised. Integer → float: always permitted, but **not always lossless**. Large integers may exceed the target float's precision (e.g., `i64` values beyond 2^53 are not exactly representable in `f64`; `i32` values beyond 2^24 are not exact in `f32`; any `i32` above 2^11 is lossy in `f16`). Precision loss rounds to nearest representable float using IEEE 754 round-to-nearest-even; no error or warning is raised. If the integer exceeds the target float's finite range, the result is `inf` or `-inf`. Float → integer: the evaluator **MUST** first check for `inf` and `nan` — both are **runtime errors** (`inf` exceeds all finite ranges, `nan` has no integer representation). If the value is finite, the decimal part is truncated toward zero, then the result is range-checked against the target type (overflow is runtime error).
 - **String → numeric**: Parses the string as a numeric literal (§5.11.1). Leading/trailing whitespace or invalid characters are errors.
-- **String → enum**: Exact match against variant names, case-sensitive (§5.11.1a). The enum **MUST** be a **named** type — per §9, `type_expr` admits only named types (plus list/tuple/null), so `to <enum>` requires the enum to have a name. Conversions targeting an anonymous enum (produced by inline `from` without `called`) are not expressible in the grammar and therefore do not arise.
+- **String → enum**: Exact match against variant names, case-sensitive (§5.11.1a). This applies to both named and anonymous enum types — the conversion matches against the variant set regardless of whether the enum has a name.
 - **Enum → enum**: Not permitted. Even if two enum types share the same variant set, `to` does not convert between them. Because UZON enum types follow **nominal identity** (§3.5) — two separately named enum types with identical variants are distinct types — `as` cannot adopt between them either. To convert a variant from one named enum to another, write an explicit `case` expression that maps each variant of the source type to the target type's corresponding variant.
 - **To `string`**: See §5.11.2 for detailed rules per type. Compound types (struct, tuple, list) and functions cannot be converted.
 - **Tagged union / untagged union → `string` only**: The `to` operator is a transparency exception (§3.7.1) — it sees the wrapper, not the inner value. The conversion table defines `to string` as a special case that extracts the inner value and converts it per §5.11.2. All other target types are type errors because `to` cannot implicitly unwrap and convert in one step. To convert a union's inner value to a non-string type, extract it via a transparent operator first (e.g., `inner is tu + 0` for numeric, `inner is tu ++ ""` for string), then apply `to`.
@@ -2247,7 +2250,7 @@ String interpolation (`{expr}` inside a string) implicitly performs `to string` 
 
 Compound types (struct, tuple, list) and functions **MUST NOT** be converted to string — neither via `to string` nor via interpolation.
 
-**`undefined` and `to string`**: When an **expression** that evaluates to `undefined` at runtime (e.g., `env.MISSING`) is the operand of `to string`, the conversion propagates — the result is `undefined`, consistent with all other `to` conversions (§5.11). This enables chaining: `env.MISSING to string or else "fallback"`. The literal keyword `undefined` on the LHS of `to` is a separate matter — it is forbidden by §4.5 (the literal is restricted to `is` / `is not` operands), so `undefined to string` written literally is a type error, not a propagation. String **interpolation** (`{expr}`), however, is a **terminal context** — if the interpolated expression evaluates to `undefined`, the evaluator **MUST** report a runtime error. Use `or else` to provide a fallback before interpolation.
+**`undefined` and `to string`**: The explicit conversion `undefined to string` **propagates** — it returns `undefined`, consistent with all other `to` conversions (§5.11). This enables chaining: `env.MISSING to string or else "fallback"`. However, string **interpolation** (`{expr}`) is a **terminal context** — if the interpolated expression evaluates to `undefined`, the evaluator **MUST** report a runtime error. Use `or else` to provide a fallback before interpolation.
 
 **Float `to string` rules**: The result is the shortest decimal string *s* such that parsing *s* as a float produces a value identical to the original. Let *k* be the number of significant digits and *n* be the exponent such that the value equals *s* × 10^(*n*−*k*); *k* **MUST** be as small as possible while preserving round-trip identity. The output format is determined by *n*:
 
@@ -2257,7 +2260,7 @@ Compound types (struct, tuple, list) and functions **MUST NOT** be converted to 
 
 The result **MUST** always contain a decimal point to distinguish it from an integer.
 
-*Implementer note*: IEEE 754 negative zero (`-0.0`) **MUST** produce `"-0.0"` — the sign is preserved. Algorithms such as Ryū, Grisu3, and Schubfach all produce valid shortest round-trip strings. For a given float value, the shortest round-trip string is unique in almost all cases — conformant implementations **SHOULD** produce identical output regardless of algorithm choice.
+*Implementer note*: IEEE 754 negative zero (`-0.0`) **MUST** produce `"-0.0"` — the sign is preserved. Algorithms such as Ryū, Grisu3, and Schubfach all produce valid shortest round-trip strings. For a given float value, the shortest round-trip string is unique in almost all cases; edge cases exist only for specific IEEE 754 values where multiple decimal strings round-trip to the same double (rare). At **conformance level Full**, implementations **MUST** produce byte-identical output across implementations by applying the following tie-breaker when multiple shortest strings exist: prefer the string with the smallest last-digit value (e.g., `0.1` over `0.10000000000000001`). At **conformance level Basic**, implementations **MAY** produce any shortest round-trip string without coordinating the tie-breaker. The Full level is REQUIRED for round-trip conformance testing; Basic is permitted for early implementations.
 
 *Sign preservation rationale*: `-0.0` preserves its sign because it is operationally meaningful — `1.0 / -0.0` produces `-inf` while `1.0 / 0.0` produces `inf`. In contrast, `-nan`'s sign bit has no operational effect per IEEE 754 — `nan` and `-nan` behave identically in all operations — so the sign is discarded in string conversion.
 
@@ -2331,7 +2334,7 @@ a is if true then 1 else b
 b is if true then 2 else a
 ```
 
-**`undefined` propagates through member access**: accessing a member on an `undefined` value yields `undefined` rather than an error. This provides implicit optional chaining — a missing intermediate path does not crash, and can be caught by `or else` at any point. Member access on `null` is a **type error** — `null` is a value (not a missing state), so accessing a field on it is a programming mistake. Member access on **function values** is also a **type error** — functions have no user-accessible fields, and the function type is statically known at the access site, making this always detectable by the type checker. Member access on other primitive values (integers, floats, bools, strings, enums) yields `undefined` — primitives have no fields.
+**`undefined` propagates through member access**: accessing a member on an `undefined` value yields `undefined` rather than an error. This provides implicit optional chaining — a missing intermediate path does not crash, and can be caught by `or else` at any point. Member access on `null` is a **type error** — `null` is a value (not a missing state), so accessing a field on it is a programming mistake. Member access on other primitive values (integers, floats, bools, strings, enums) yields `undefined` — primitives have no fields.
 
 ```uzon
 config is { }
@@ -2366,7 +2369,7 @@ debug is _raw is "true" or _raw is "1" or _raw is "yes"
 
 ### 5.14 Field Extraction (`of`)
 
-The `of` keyword in binding position extracts a field from a struct using the binding's own name as the lookup key. `a is of b` is equivalent to `a is b.a` **when `b` is a struct** — the two forms diverge on non-struct operands: `of` on a non-struct (number, string, list, etc.) is a type error, whereas `.` on a primitive yields `undefined` (§5.12). Use `of` only when the operand is known to be a struct; otherwise use `.` and let `undefined` propagate. The expression after `of` is restricted to member access — operators (`or else`, `as`, arithmetic) cannot be combined with `of` (see below for details and workarounds).
+The `of` keyword in binding position extracts a field from a struct using the binding's own name as the lookup key. `a is of b` is equivalent to `a is b.a`. The expression after `of` is restricted to member access — operators (`or else`, `as`, arithmetic) cannot be combined with `of` (see below for details and workarounds).
 
 ```uzon
 _startup is struct "./startup"
@@ -2437,7 +2440,7 @@ make is function returns (i32, i32) {
 x is (function n as i32 returns i32 { n + 1 })(10)   // x is 11
 ```
 
-The outer parentheses around the function literal are **stylistic, not required**. Per the `call_or_access` production (§9), `function n as i32 returns i32 { n + 1 }(10)` parses identically: the function literal is a `primary`, and `(10)` is a `call_or_access` suffix applied to it — the function is called with argument `10`. Authors **SHOULD** include the grouping parentheses for readability, as in the example above — they make the function literal's extent visually unambiguous to human readers, especially when the body spans multiple lines.
+The grouping parentheses around the function literal are required — without them, `}(10)` would attempt to call the struct/function body directly, which is syntactically valid by `call_or_access` but results in a type error since struct and list literals are not callable. The `call_or_access` production imposes no restriction on callee type at parse time — type errors from calling non-function values are caught during evaluation.
 
 Functions are values — they can be stored in bindings, passed as arguments, and retrieved from lists or structs before calling:
 
@@ -2515,7 +2518,7 @@ std.reverse("")                       // ""
 
 #### 5.16.2 Collection Query
 
-**`std.get(collection, index_or_key)`** — Retrieves an element from a list or tuple by index (`i64`), or a field from a struct by name (`string`). Returns `undefined` if the index is out of bounds or the key does not exist — consistent with member access (§5.12). Negative indices are treated as out-of-bounds and return `undefined` — there is no Python-style wraparound (consistent with §3.4.2). For tuples, this provides dynamic index access (whereas `.0`, `.1` etc. are static). Since tuples are heterogeneous, the return type when the index is not a **literal integer** (i.e., cannot be statically resolved to a specific tuple position) is the union of all distinct element types (if all elements share the same type, the return type is simply that type — no union wrapper is created); the result is always `undefined`-able (the index may be out of bounds). For structs, the same rule applies — the return type is the union of all distinct field value types (or the common type if all fields share one); the result is `undefined`-able (the key may not exist). If the second argument's type does not match the expected type for the collection (`i64` for lists/tuples, `string` for structs), it is a **type error**. The synthesized union type is an anonymous union — it is structurally compatible with any user-declared anonymous union of the same member set (§3.6 union type identity). To assign the result to a named union type (via `called` or standalone declaration), use `as NamedUnionType`.
+**`std.get(collection, index_or_key)`** — Retrieves an element from a list or tuple by index (`i64`), or a field from a struct by name (`string`). Returns `undefined` if the index is out of bounds or the key does not exist — consistent with member access (§5.12). Negative indices are treated as out-of-bounds and return `undefined` — there is no Python-style wraparound (consistent with §3.4.2). For tuples, this provides dynamic index access (whereas `.0`, `.1` etc. are static). Since tuples are heterogeneous, the return type when the index is not a compile-time constant is the union of all distinct element types (if all elements share the same type, the return type is simply that type — no union wrapper is created); the result is always `undefined`-able (the index may be out of bounds). For structs, the same rule applies — the return type is the union of all distinct field value types (or the common type if all fields share one); the result is `undefined`-able (the key may not exist). If the second argument's type does not match the expected type for the collection (`i64` for lists/tuples, `string` for structs), it is a **type error**. The synthesized union type is an anonymous union — it is structurally compatible with any user-declared anonymous union of the same member set (§3.6 union type identity). To assign the result to a named union type (via `called` or standalone declaration), use `as NamedUnionType`.
 
 ```uzon
 std.get([ 10, 20, 30 ], 1)             // 20
@@ -2531,7 +2534,7 @@ std.hasKey({ name is "UZON" }, "port")    // false
 std.hasKey({ port is 8080, host is "localhost" }, "port")  // true
 ```
 
-**`std.keys(struct)`** — Returns the field names of a struct as a `[string]` list, in declaration order. The argument **MUST** be a struct — passing a list, tuple, or other type is a **type error**. Field names from quoted identifiers (§2.3) are returned as their **content without the surrounding quotes** — `'Content-Type' is "x"` yields the key `"Content-Type"`. Since `'key'` and `key` refer to the same name (§2.3), the returned string is identical regardless of which form was used in the source.
+**`std.keys(struct)`** — Returns the field names of a struct as a `[string]` list, in declaration order. The argument **MUST** be a struct — passing a list, tuple, or other type is a **type error**.
 
 ```uzon
 std.keys({ host is "localhost", port is 8080 })
@@ -2588,8 +2591,6 @@ std.any(servers, function s as Server returns bool { s.port < 1024 })
 #### 5.16.4 Collection Transform
 
 Collection transform functions (`std.filter`, `std.map`, `std.reduce`, `std.sort`) operate on **lists only**, not tuples. Tuples are fixed-length and heterogeneously typed, so filtering or sorting them is not meaningful. **Empty list behavior**: `std.filter([], f)` returns `[]`. `std.map([], f)` returns `[]`. `std.sort([], f)` returns `[]`. `std.reduce([], initial, f)` returns `initial` — the function is never called. These are consistent with standard functional programming conventions. **Arity requirements**: `std.filter` and `std.map` require a 1-parameter function; `std.reduce` requires a 2-parameter function (accumulator, element); `std.sort` requires a 2-parameter comparator. Passing a function with the wrong number of parameters is a **type error**.
-
-**Named type preservation**: When the input is a value of a named list type (e.g., `Colors is [RGB]` via standalone declaration or `called`), functions that preserve element type also preserve the named type — `std.reverse`, `std.filter`, and `std.sort` return a value of the same named type as the input. `std.map` may change the element type, so its result is always an anonymous `[U]` where `U` is the function's return type; to obtain a named result, use `as NamedType` on the call site. `std.reduce` produces a non-list result, so named-list preservation does not apply. This rule also applies to strings — `std.reverse(s)` where `s` has a named string type (via `called`) preserves that named type.
 
 **`std.filter(list, func)`** — Returns a new list containing only the elements for which the function returns `true`. The function **MUST** return `bool`.
 
@@ -2822,14 +2823,6 @@ x is red as RGB     // "red" is ambiguous — must specify
 y is red as Warm
 ```
 
-**`null as T`**: The `as` operator requires **type conformance**, not value compatibility. `null` is value-compatible with any type in certain contexts (§5.2 `is`/`is not`, §5.7 `or else`, §5.9/§5.10 branch unification, §3.2.1 `with` override), but `as` does not participate in null-compatibility coercion. `null as T` is **valid only when**:
-
-- `T` is `null` itself (identity), or
-- `T` is an untagged union that includes `null` as a member type, or
-- `T` is a named tagged union with a variant whose inner type is `null` — combined with the `named` requirement (`null as TU named variant` where `variant`'s inner type is `null`).
-
-For any other `T` — primitives (`i32`, `f64`, `string`, `bool`), lists, tuples, named structs, named enums, named unions without a `null` member, or tagged unions without a `null`-typed variant — `null as T` is a **type error**. To construct a null-able value, either declare the type to include `null` (e.g., `union T, null`) or use `or else` at the use site.
-
 ### 6.2 Type Naming
 
 There are two ways to create a named type:
@@ -2902,7 +2895,7 @@ another is "fail" as Result named err
 // "fail" named err as Result is a syntax error.
 ```
 
-When `as` is used with a named type, the value **MUST** conform to that type's structure. This is **structural conformance** — an anonymous struct can be annotated with a named type via `as` if its fields match the named type's definition. This does not violate nominal identity (§3.2.1 rule 5): `as` is an adoption operation that transforms an anonymous value into a named-type value, not an identity comparison. After `{ x is 1 } as Point`, the result is a `Point` value. Conformance follows the same rules as `with` type compatibility (§3.2.1): field names must match exactly (no extra, no missing), field types must be identical, and field order does not matter. Untyped literals adopt the expected field type and are range-checked — if the named type defines `x is 0 as i32`, then `{ x is 1000000 } as Point` adopts `i32` for `x` and verifies the value fits. Conformance checking is recursive — nested struct fields are checked against their declared types in the named type definition. Using `as` with a tagged union type **requires** `named` to specify the active variant — `as TaggedUnionType` without `named` is a type error, because a tagged union value must always have a variant tag. Using `as` with a named union type checks that the value's type matches at least one of the union's member types — if no member type is compatible, it is a type error. For **untyped literals** applied to a named union (e.g., `42 as U` where `U is union i32, string`), the literal adopts the **first member type in declaration order whose category exactly matches** — integer, float, string, or bool. If no exact-match member exists, an integer literal **may** adopt the first float-typed member instead (per §5 integer-to-float promotion). Cross-category coercion is **asymmetric** per §5: integer literals may adopt a float type, but float literals **never** adopt an integer type (even if the value is integral, e.g., `3.0`). Range-checking against the adopted member type then applies per §6.1. If no member type's category matches and no eligible promotion applies — e.g., `42 as V` where `V is union string, bool`, or `3.14 as W` where `W is union i32, string` — it is a **type error**. (`union string, bool` and `union i32, string` shown here are the named-union declarations; `as union ...` cannot be written inline because `union` is not a `type_expr` per §9.) For `null` specifically, `null as U` requires `null` to be an explicit member of `U` — if `U` has no `null` member, it is a type error (use `union ..., null` to make the union null-able).
+When `as` is used with a named type, the value **MUST** conform to that type's structure. This is **structural conformance** — an anonymous struct can be annotated with a named type via `as` if its fields match the named type's definition. This does not violate nominal identity (§3.2.1 rule 5): `as` is an adoption operation that transforms an anonymous value into a named-type value, not an identity comparison. After `{ x is 1 } as Point`, the result is a `Point` value. Conformance follows the same rules as `with` type compatibility (§3.2.1): field names must match exactly (no extra, no missing), field types must be identical, and field order does not matter. Untyped literals adopt the expected field type and are range-checked — if the named type defines `x is 0 as i32`, then `{ x is 1000000 } as Point` adopts `i32` for `x` and verifies the value fits. Conformance checking is recursive — nested struct fields are checked against their declared types in the named type definition. Using `as` with a tagged union type **requires** `named` to specify the active variant — `as TaggedUnionType` without `named` is a type error, because a tagged union value must always have a variant tag. **The value preceding `as T named variant` MUST conform to `variant`'s declared inner type using the same recursive conformance rules.** For example, `42 as Result named err` where `err`'s inner type is `string` is a **type error** — the value `42` (type `i64`) does not conform to `string`. If `variant`'s inner type is itself a named struct, enum, or tagged union, recursive conformance applies: `{ x is 1 } as Outer named wrap` where `wrap`'s inner type is `Inner` (a named struct) requires `{ x is 1 }` to conform to `Inner`'s field structure. If `variant`'s inner type is `null`, only `null` conforms. If `variant`'s inner type is a tuple or list, element-wise conformance applies. Using `as` with a named union type checks that the value's type matches at least one of the union's member types — if no member type is compatible, it is a type error.
 
 ---
 
@@ -2936,7 +2929,7 @@ q is struct "./mod1"
 r is q.array ++ [ 4, 5 ]
 ```
 
-The path is a string literal, resolved relative to the importing file's location. Absolute paths (e.g., `"/etc/config"`) are **permitted** by the grammar but **SHOULD NOT** be used in portable documents — implementations **MAY** reject them with a **runtime error** for security reasons. Implementations that accept or reject absolute paths **MUST** document their policy (e.g., in release notes or security documentation) so that users can predict behavior across environments. The path **MUST** be a non-interpolated string — interpolation in import paths is a syntax error, because import resolution occurs before expression evaluation. If the last component of the path does not contain a `.` character, the evaluator **MUST** automatically append `.uzon` and resolve accordingly. If the path already contains a `.` in the last component (e.g., `"./data.uzon"`, `"./my.config"`), it is used as-is.
+The path is a string literal, resolved relative to the importing file's location. Absolute paths (e.g., `"/etc/config"`) are **permitted** by the grammar, but for portability across implementations the following policy is normative: by **default**, implementations **MUST** reject absolute paths with a **runtime error**; absolute paths are accepted **only** when the user explicitly opts in through a documented implementation mechanism (e.g., a CLI flag `--allow-absolute-imports`, an environment variable, or a config option). Implementations **MUST** document the opt-in mechanism in their release notes or user-facing documentation. This default-deny policy ensures that the same portable UZON document behaves identically across implementations: absolute paths never work unless the user has explicitly enabled them. The path **MUST** be a non-interpolated string — interpolation in import paths is a syntax error, because import resolution occurs before expression evaluation. If the last component of the path does not contain a `.` character, the evaluator **MUST** automatically append `.uzon` and resolve accordingly. If the path already contains a `.` in the last component (e.g., `"./data.uzon"`, `"./my.config"`), it is used as-is.
 
 ```uzon
 shared is struct "./shared"         // resolves to ./shared.uzon
@@ -2944,11 +2937,11 @@ utils is struct "./lib/utils"       // resolves to ./lib/utils.uzon
 explicit is struct "./data.uzon"    // used as-is
 ```
 
-**Path canonicalization**: After resolving the relative path against the importing file's directory and appending `.uzon` if needed, the evaluator **MUST** canonicalize the result to a **physical absolute path** before using it for circular import detection or diamond import deduplication. Canonicalization **MUST** include: (1) converting to an absolute path, (2) resolving `.` and `..` segments, and (3) resolving symbolic links to their physical target. Two import paths that refer to the same physical file **MUST** produce the same canonical path, regardless of how the paths are written in source. Implementations that compare raw or partially resolved path strings will fail to detect circular imports and diamond duplicates when different relative paths (e.g., `"./shared"` from one directory and `"../shared"` from a subdirectory) or symbolic links refer to the same file.
+**Path canonicalization**: After resolving the relative path against the importing file's directory and appending `.uzon` if needed, the evaluator **MUST** canonicalize the result to a **physical absolute path** before using it for circular import detection or diamond import deduplication. Canonicalization **MUST** include: (1) converting to an absolute path, (2) resolving `.` and `..` segments, (3) resolving symbolic links to their physical target, (4) removing redundant separators and trailing separators (`./foo/` and `./foo` canonicalize identically), and (5) using the **filesystem's own case-sensitivity policy** for path comparison — on case-sensitive filesystems (most Unix-like) canonical paths are byte-compared; on case-insensitive filesystems (default HFS+/APFS, NTFS, FAT) canonical paths are compared case-insensitively per the filesystem's casefolding rules. Implementations **MUST** delegate case comparison to the OS filesystem APIs (e.g., `realpath(3)` followed by filesystem-aware comparison); they **MUST NOT** perform Unicode case-folding independently, since the OS may apply filesystem-specific rules (e.g., HFS+'s proprietary casefolding). Two import paths that refer to the same physical file **MUST** produce the same canonical path, regardless of how the paths are written in source. Implementations that compare raw or partially resolved path strings will fail to detect circular imports and diamond duplicates when different relative paths (e.g., `"./shared"` from one directory and `"../shared"` from a subdirectory) or symbolic links refer to the same file.
 
 **Import errors**: If the target file does not exist, the evaluator **MUST** report a **runtime error** with the resolved path. Dangling symbolic links (links pointing to nonexistent targets) and symlink loops (circular chains of symbolic links) are also **runtime errors**. These are runtime errors (not syntax or type errors) because they depend on the external file system state.
 
-**Sandbox policy**: Implementations **MAY** restrict import paths to a sandbox directory (e.g., the entry file's directory tree) and reject paths that escape the sandbox with a **runtime error**. Path traversal via `..` segments that would escape the sandbox **SHOULD** be rejected. **Order**: the sandbox check **MUST** be performed **after canonicalization** (against the physical absolute path produced by the canonicalization step above), not against the raw source path. This ensures that symbolic links inside the sandbox pointing to files outside the sandbox are correctly rejected, and that `..` traversal written in source but resolving inside the sandbox is correctly accepted. This specification does not mandate a specific sandbox boundary — it is implementation-defined. Security-sensitive deployments **SHOULD** document their sandbox restrictions.
+**Sandbox policy**: By **default**, implementations **MUST** restrict import paths to the **entry file's directory tree** (the "standard sandbox profile") — any canonicalized path that falls outside the entry file's directory or any of its subdirectories **MUST** be rejected with a **runtime error**. Path traversal via `..` segments that would escape the standard sandbox **MUST** be rejected. Implementations **MAY** provide an opt-in mechanism (documented CLI flag, environment variable, or config option) to widen or disable the sandbox; they **MUST** document the mechanism. This default-narrow policy, like the absolute-path default (above), ensures portable UZON documents behave identically across implementations. Security-sensitive deployments **SHOULD** NOT widen the default; tooling deployments (e.g., dev-time editors) that legitimately need broader access **MUST** require explicit opt-in.
 
 ```
 // Example: both resolve to the same physical file
@@ -3035,6 +3028,55 @@ theme is struct "./theme"
 This file-boundary isolation ensures that a file's behavior is identical whether it is imported or used standalone — it never depends on who imports it or in what order. This also makes diamond imports (where multiple files import the same dependency) safe: since the shared file cannot see any importer's scope, deduplication produces consistent results regardless of import order. When two import paths resolve to the same canonical path (§7.1), the evaluator reuses the **same parsed result** — the two bindings refer to the same struct value, so comparing them with `is` returns `true`.
 
 **Cross-file type identity**: Named types declared in different files are **different types**, even if they have the same name and identical structure. Type identity is determined by the declaring scope — `Point` in `a.uzon` and `Point` in `b.uzon` are two distinct nominal types. To share a type across files, declare it in a common file and import it.
+
+**Identity stamping**: Implementations **MUST** maintain a nominal identity for each named type that survives operations on values of that type. The identity is conceptually the pair `(declaring file's canonical path, type name)` but implementations **MAY** use any equivalent representation (e.g., interning type descriptors by canonical path + name, or qualified-name strings like `"path/to/mod.uzon#Point"`). The representation is implementation-defined; the **preservation behavior** across operations is normative:
+
+| Operation on a value of named type `T` | Result's nominal type |
+|---|---|
+| `v` (bare reference, alias binding) | `T` — preserved |
+| `v.field` (member access, non-nominal field) | field's declared type (may be different) |
+| `v.field` (member access, nominal field) | field's declared named type, preserved |
+| `v as T` (identity annotation) | `T` — no-op |
+| `v with { ... }` | `T` — preserved (§3.2.1 value-copy) |
+| `v plus { ... }` | **anonymous** — new shape, `T` dropped (§3.2.2) |
+| `[v, v, ...]` (list of `T` values) | `[T]` — preserved per element |
+| `std.reverse(v)` where `v` is `[T]` | `[T]` — preserved (§5.16) |
+| `std.filter(v, f)` where `v` is `[T]` | `[T]` — preserved |
+| `std.sort(v, cmp)` where `v` is `[T]` | `[T]` — preserved |
+| `std.map(v, f)` | **anonymous** `[U]` where `U` is `f`'s return type |
+| `std.reduce(v, init, f)` | `f`'s return type (not list-typed) |
+| Imported struct value from `_mod.v` | original `T` from `_mod`'s declaring file |
+| Function return value of declared type `T` | `T` — preserved |
+| `case` / `if` branch result | the common named type if all branches agree; anonymous otherwise |
+| `or else` result | left operand's type (which is `T` if left is `T`) |
+
+**Multi-hop identity preservation**: When a value crosses multiple file boundaries via import chains (e.g., `main` imports `util`, `util` imports `shared`, `shared.Point` is imported transitively as `main.util.shared.Point`), the value's nominal identity **MUST** remain bound to the **original declaring file** (`shared.uzon`), not to any intermediate re-exporting file. Two values of type `shared.Point` obtained via different import chains are the **same** nominal type. This requires implementations to stamp identity at the declaring site, not at any import site.
+
+**Identity under symlinks**: Two import paths that resolve to the same canonical file via §7.1 canonicalization (including symlink resolution) share the **same declaring file** and therefore the **same** nominal identity. A value typed as `Point` obtained through a symlinked path is the same type as a value obtained through the direct path.
+
+**Identity representation**: Implementations **MUST** represent each named type's identity as a pair of (declaring-file canonical path, type name) — not merely the type name. This ensures cross-file distinctness without relying on brittle string conventions. The canonical path is the one produced by §7.1 canonicalization; two imports via different symbolic paths that resolve to the same physical file produce the same identity. Printed or error-message forms of type names (e.g., `m.Point` when accessed via an import binding `m`) are **display conventions** — the underlying identity is the (path, name) pair.
+
+**Type name preservation table**: The following table specifies which operations preserve a value's named type identity and which produce anonymous or fresh-named values. This is normative — implementations that strip or mint type names differently violate nominal identity.
+
+| Operation                                               | Named type preserved? | Notes                                                           |
+|---------------------------------------------------------|-----------------------|-----------------------------------------------------------------|
+| Binding copy: `b is a` where `a` has named type `T`     | ✓ (same `T`)          | Identity is a property of the value, not the binding.           |
+| `as T` (adoption of anonymous to named)                 | ✓ (adopts `T`)        | §6.3.                                                           |
+| `as T` (named `T` adopted as the same `T`)              | ✓ (identity)          | No-op — value already has type `T`.                             |
+| `as U` where `U ≠ T`                                    | ✓ (changes to `U`)    | Conformance-checked per §6.3 — structural fields must match.    |
+| `with { ... }` on named `T`                             | ✓ (same `T`)          | §3.2.1 — result is `T` with overrides.                          |
+| `plus { ... }` on named `T`                             | ✗ (anonymous)         | §3.2.2 — result is a new shape; use `as NewType` to re-name.    |
+| Import: reference across files preserves original identity | ✓                    | §7.3 — (path, name) pair carries through.                       |
+| Function argument: passing a named `T` value            | ✓                    | Parameter receives the same identity.                           |
+| Function return: returning a named `T` value            | ✓                    | Caller receives the same identity.                              |
+| `std.reverse`/`std.filter`/`std.sort` on `[T]`          | ✓                    | §5.16 — named list type preserved.                              |
+| `std.map` on `[T]`                                      | ✗ (anonymous `[U]`)   | §5.16 — element type may change; use `as [NewType]` to re-name. |
+| `std.reduce`                                            | N/A                   | §5.16 — result is a non-list value; named-list preservation N/A.|
+| `with`/`plus` producing a union member                  | ✓ (if member is named)| Member's named identity is preserved.                           |
+| Tuple/list literal containing named values              | ✓                     | Named element identities preserved independently.               |
+| String interpolation (`{expr}`)                         | N/A                   | Converts to string — type identity discarded.                   |
+| `to string`                                             | N/A                   | §5.11.2 — result is a string value.                             |
+| `to T` (conversion) where `T` is a primitive            | No (result type is `T`)| §5.11 — conversion replaces the type, not a preservation.      |
 
 **Import shadowing**: If the importing file declares a binding with the same name as the import binding, the local binding shadows the import — normal lexical scoping applies. The imported file's bindings are only accessible through the import binding's dot notation (`imported.field`), so shadowing the import binding itself makes the imported file's contents inaccessible (unless another binding references it).
 
@@ -3129,27 +3171,13 @@ is_binding      = "is" , ( "of" , member_access          (* field extraction: a 
                      binding-level type naming applied to the result. *)
 are_binding     = "are" , expression , { "," , expression } ,
                   [ "as" , type_expr ] , [ "called" , name ] ;
-                (* GRAMMAR DISAMBIGUATION: The final `as type_expr` in this
-                   production is ambiguous because `expression` internally
-                   consumes `as` (via type_annot_level). The disambiguation
-                   rule — normative prose in §3.4.1, formalized here — is
-                   that a trailing `as type_expr` immediately before `called`
-                   or the end of the are_binding is ALWAYS lifted to the
-                   are_binding level (list-level annotation), and is NEVER
-                   consumed by the final expression's type_annot_level.
-                   This requires non-local reinterpretation by the parser:
-                   after the final expression is parsed, if its outermost
-                   node is a type_annot_level with an `as` clause AND no
-                   binary operator, postfix continuation, or `,` follows
-                   the type_expr, the `as type_expr` MUST be extracted
-                   from the expression and attached to the are_binding.
-                   For element-level `as` on the final element, wrap in
-                   parentheses: `ids are 1, 2, (3 as i32)`. Intermediate
-                   elements (before a comma) may freely consume `as` via
-                   expression parsing — the lift applies only to the
-                   final position.
-                   Multiline are bindings are supported — continuation
-                   follows the NEWLINE_SEP rule. *)
+                (* The optional "as" at the end is the list-level type annotation,
+                   NOT part of the last element. The parser resolves this by treating
+                   a trailing "as" after the final element as the binding's annotation.
+                   For element-level annotation, wrap in parentheses:
+                   ids are 1, 2, (3 as i32).
+                   Multiline are bindings are supported — continuation follows
+                   the NEWLINE_SEP rule. *)
 
 (* === Expressions === *)
 expression      = or_else_level ;
@@ -3216,17 +3244,7 @@ from_clause     = "from" , ( "union" , type_expr , "," , type_expr ,
                    Duplicate variant names within a single `from` clause are a syntax error — each variant must be unique. Variant consumption terminates when: (1) a comma is followed by a
                    non-keyword identifier + "is"/"are" (2-token lookahead, same pattern
                    as NEWLINE_SEP), (2) "called" appears, (3) a closing delimiter or
-                   EOF is reached. Keywords after comma are consumed as variants.
-                   DISAMBIGUATION of `from union`: the two alternatives collide on the
-                   token `union` because `variant_name = name | keyword` admits `union`
-                   as a variant name. Resolve by 1-token lookahead AFTER `union`:
-                     - next token is `,` → `union` is a variant_name (ENUM alternative);
-                       e.g., `from union, a, b` declares an enum with variants
-                       (union, a, b).
-                     - next token starts a type_expr (named_type, `[`, `(`, `null`) →
-                       `union` is the keyword (UNION alternative);
-                       e.g., `from union i32, string` declares an untagged union over
-                       (i32, string). *)
+                   EOF is reached. Keywords after comma are consumed as variants. *)
 variant_name    = name | keyword ;
                 (* Bare keywords are valid as enum/tagged-union variant names.
                    e.g., x is a from a, named, b — "named" is a variant here.
@@ -3246,41 +3264,10 @@ variant_shorthand = variant_name , primary ;
                    `(pressed "v") as Event`, not `pressed ("v" as Event)`.
                    Compound inner expressions must be parenthesized:
                    `pressed (a ++ b)`, `pressed (if c then "x" else "y")`.
-                   (Separately: a **bare** variant_name with no following
-                   primary is NOT a variant_shorthand — it is parsed as
-                   the `primary = name` alternative. Such a bare name in
-                   a variant-resolving context (§3.5) denotes
-                   `null named variant_name` for nullary tagged-union
-                   variants, or the enum variant when the context is an
-                   enum type. This is a §3.5 resolution rule, not a
-                   grammar extension of variant_shorthand.)
-                   KEYWORD VARIANT NAMES: Because variant_name admits bare
-                   keywords (per the production above), forms such as
-                   `undefined "v"` or `named "v"` are grammatically valid
-                   variant_shorthand constructions. At the declaration
-                   site, `@` escape is RECOMMENDED for clarity
-                   (`@undefined`, `@named`) — the unescaped form is legal
-                   but invites reader confusion. Keyword-escaped names
-                   (§2.4) are `name` tokens — so `@type "x"` and
-                   `@default 42` are ordinary variant_shorthand forms
-                   eligible for NEWLINE_SEP lookahead like any
-                   non-keyword name. Semantic constraints on
-                   consumption (`called`, `is`, `are` are never
-                   variant_name) still apply regardless of escape.
-                   NESTED SHORTHANDS: Because `primary` itself admits
-                   `variant_shorthand`, nesting is right-recursive and
-                   parses greedily — e.g., `outer inner "v"` parses as
-                   `outer (inner "v")`. Parenthesize when the intended
-                   grouping differs (`(outer inner) "v"` is a syntax
-                   error — variant_shorthand is not a primary suffix).
-                   MEMBER ACCESS: A postfix `.field` attaches to the
-                   whole primary — `pressed {x is 1}.x` parses as
-                   `(pressed {x is 1}).x`. This yields the expected
-                   result because `.` is transparent through tagged
-                   unions (§3.7.1) — the `.x` reaches the inner struct's
-                   `x`. If a different grouping is intended (e.g.,
-                   member access BEFORE variant wrapping, which is rare),
-                   parenthesize: `pressed ({x is 1}.x)`. *)
+                   A bare variant_name (no following primary) is also
+                   valid in type-context positions and resolves to
+                   `null named variant_name` for nullary variants, or to
+                   the enum variant if the context is an enum type. *)
 named_clause    = "named" , variant_name , [ "from" ,
                   variant_name , "as" , type_expr , "," ,
                   variant_name , "as" , type_expr ,
@@ -3418,28 +3405,14 @@ list            = "[" , [ expression , { "," , expression } , [ "," ] ] , "]" ;
 
 (* === Control === *)
 if_expr         = "if" , expression , "then" , expression , "else" , expression ;
-case_expr       = case_value_expr | case_type_expr | case_named_expr ;
-case_value_expr = "case" , expression ,
-                  "when" , expression , "then" , expression ,
-                  { "when" , expression , "then" , expression } ,
+case_expr       = "case" , [ "type" | "named" ] , expression ,
+                  "when" , ( type_expr | variant_name | expression ) , "then" , expression ,
+                  { "when" , ( type_expr | variant_name | expression ) , "then" , expression } ,
                   "else" , expression ;
-case_type_expr  = "case" , "type" , expression ,
-                  "when" , type_expr , "then" , expression ,
-                  { "when" , type_expr , "then" , expression } ,
-                  "else" , expression ;
-case_named_expr = "case" , "named" , expression ,
-                  "when" , variant_name , "then" , expression ,
-                  { "when" , variant_name , "then" , expression } ,
-                  "else" , expression ;
-                  (* Three forms, distinguished by the prefix keyword:
+                  (* Three forms:
                      case expr when val then ...        — value matching
                      case type expr when T then ...     — type dispatch (any value)
                      case named expr when tag then ...  — variant dispatch (tagged unions)
-                     Each form has a distinct "when" shape — no alternation
-                     ambiguity. (Note: variant_name is a syntactic subset of
-                     expression, and type_expr overlaps with expression via
-                     named_type; the split productions make the intended
-                     shape unambiguous at the grammar level.)
                      At least one "when" clause is REQUIRED.
                      If no "when" matches, the "else" branch is taken. *)
 
@@ -3471,13 +3444,9 @@ function_body   = "{" , [ func_binding , { sep , func_binding } , [ sep ] ] ,
                      Recursive calls (direct or mutual) are forbidden — the call
                      graph MUST be a DAG, checked statically.
                      For functions with returns (), the final expression
-                     MUST evaluate to the empty tuple value `()` — the `()`
-                     literal is the idiomatic form, but any expression whose
-                     value is `()` is valid (e.g., a binding of type `()` or
-                     a call to a function that returns `()`). An empty body
-                     { } without any expression is a syntax error —
-                     regardless of the declared return type, every function
-                     body requires a final expression. *)
+                     MUST be () (the empty tuple literal). An empty body
+                     { } without any expression is a syntax error — every
+                     function body requires a final expression. *)
 func_binding    = name , "is" , expression ;
                   (* Only "is" bindings are permitted in function bodies.
                      "are" (list shorthand) and "called" (type naming) are
@@ -3551,19 +3520,17 @@ ws              = { " " | "\t" } ;
      When the lexer encounters "is", it checks if the next token is "not" —
      if so, it further checks if the token after that is "named" to distinguish
      "is not named" from "is not". Similarly for "is" + "named" and "or" + "else".
-   - BINDING DECOMPOSITION: At binding position (immediately after a name at
-     the start of a binding), the first "is" is always the binding operator.
-     Composite `is`-tokens are decomposed: the leading "is" becomes the
-     binding operator, and the remaining tokens begin the value expression.
-       "is not"        → binding + (not expr)
-       "is named"      → binding + (named expr)
-       "is not named"  → binding + (not named expr)
-       "is type"       → binding + (type expr) — parse error, since "type"
-                         alone cannot start an expression
-       "is not type"   → binding + (not type expr) — parse error, same reason
+   - BINDING DECOMPOSITION: At binding position, the first "is" is always the
+     binding operator. Composite tokens are decomposed: "is not" → binding + "not expr",
+     "is named" → binding + "named expr", "is type" → binding + "type expr" (parse error
+     since "type" cannot start an expression). "is not named" → binding + "not named expr".
+     To use these as comparison operators at binding level, wrap in parentheses:
+     y is (x is not named foo).
+   - ORIGINAL DECOMPOSITION DETAIL: When a composite "is not" / "is named" / "is not named"
+     token appears at binding position (immediately after a name at the start of a
+     binding), the parser MUST decompose it: "is" is the binding operator, and the
+     remaining tokens ("not", "named", "not named") begin the value expression.
      Example: `x is not true` parses as `x = (not true)`, NOT as `x (is not) true`.
-     To use these as comparison operators at binding position, wrap the RHS
-     in parentheses: `y is (x is not named foo)`.
    - Multi-character operators (<=, >=, ++, **, //) use longest-match.
    - A minus sign is context-sensitive: after a value token
      (number, string, identifier, true/false/null/inf/nan, undefined, env, ")", "]", "}"),
@@ -3578,7 +3545,7 @@ unquoted_id     = (* one or more contiguous non-whitespace characters not
                      { } [ ] ( ) , . " ' @ + - * / % ^ < > = ! ? : ; | & $ ~ # \ //
                      and not matching a keyword or numeric literal grammar.
                      Keywords in identifier position MUST be escaped with @. *) ;
-quoted_id       = "'" , { (* any character except "'" — no escape mechanism; §2.3 *) } , "'" ;
+quoted_id       = "'" , { (* any character except unescaped "'" *) } , "'" ;
                   (* The enclosing quotes are syntax — 'key' and key are the same
                      name. If the unquoted content matches a keyword, it remains a
                      keyword (use @ escape instead). An unmatched ' is a syntax error. *)
@@ -3631,7 +3598,7 @@ A UZON file is an anonymous struct containing zero or more bindings.
 
 ### 11.2 Error Handling
 
-Parsers **MUST** reject syntactically invalid documents with a clear error message indicating the location of the error. Implementations **MUST** detect and report circular dependencies (via static analysis; §5.12, §3.8). Evaluators **MUST** report runtime errors from evaluation (e.g., invalid `to` conversions where the value cannot be represented in the target type). Implementations **MAY** report multiple errors from a single document (e.g., continuing to parse after the first syntax error to find additional issues), but are not required to — reporting only the first error is conformant.
+Parsers **MUST** reject syntactically invalid documents with a clear error message indicating the location of the error. Evaluators **MUST** report errors for circular dependencies and invalid `to` conversions. Implementations **MAY** report multiple errors from a single document (e.g., continuing to parse after the first syntax error to find additional issues), but are not required to — reporting only the first error is conformant.
 
 #### 11.2.0 Error Location
 
@@ -3642,8 +3609,6 @@ All error messages **MUST** include the location where the error was detected. T
 **String input** (parsing UZON from a string in a host language): The error message **MUST** include the **line number** and **column number**.
 
 **Imported files** (`struct` imports): When an error originates inside a file imported via `struct`, the error message **MUST** include the **file name**, **line number**, and **column number** of the imported file where the error occurred — not the import site. If the error propagates to the importing file (§11.2 error propagation), implementations **SHOULD** additionally include the import chain to help the user trace the error.
-
-**Circular imports** (§7.2): For a cycle such as A → B → A, the canonical error location **MUST** be the `struct "path"` expression that **closes** the cycle — i.e., the import attempt whose target is already in the currently-in-progress import stack. Implementations **SHOULD** include the full cycle chain in the error message (e.g., `circular import: A.uzon → B.uzon → A.uzon`) so that the user can identify both endpoints.
 
 The error message format shown below is **illustrative** — this specification does not mandate a canonical format. Implementations **MUST** include location information (file, line, column) but **MAY** choose their own formatting, punctuation, and wording.
 
@@ -3670,6 +3635,18 @@ Good: Line 5: 'port' needs a number, but you gave it a text value ("8080").
 
 **Error priority**: When multiple error conditions apply, implementations **MUST** prioritize in this order: (1) syntax errors (parsing — includes lexer errors such as unmatched quotes, invalid escape sequences, and invalid UTF-8), (2) circular dependency errors (static analysis), (3) type errors (type checking), (4) runtime errors (evaluation — overflow, division by zero, invalid conversion, undefined reaching a terminal context, file I/O failures during import, and other evaluation failures; see §3.1, §5.3, §7.1 for specific cases).
 
+**Canonical error-class prefix (RECOMMENDED)**: To aid conformance testing and tool integration, implementations **SHOULD** prefix error messages with one of the following canonical class tokens, followed by `:` and a space:
+
+| Prefix | Class | Examples |
+|---|---|---|
+| `SyntaxError:` | Lexical or grammatical errors | unmatched quote, bad escape, unexpected token |
+| `CircularError:` | Dependency cycles | binding cycle, import cycle, mutual type recursion |
+| `TypeError:` | Type-checking failures | field shape mismatch, wrong variant inner type, non-conformant `as` |
+| `RuntimeError:` | Evaluation failures | overflow, division by zero, `undefined` in terminal context |
+| `ImportError:` | Import-resolution failures | file not found, dangling symlink, absolute path without opt-in, sandbox violation |
+
+This prefix is a conformance-suite affordance: tests can assert "rejected with prefix `TypeError:`" without constraining the rest of the human-readable message. Implementations that prefer fully human-phrased messages may prepend the canonical prefix only when a machine-readable output mode is requested (e.g., `--machine-readable` flag, JSON output format). The prefix is **RECOMMENDED**, not **MUST** — implementations targeting end-users who never interact with test suites may omit it.
+
 ```uzon
 a is 1 / 0               // error: division by zero
 b is a + 1          // error: propagated from a
@@ -3689,7 +3666,7 @@ Conformant implementations **MUST** reject the following:
 - Duplicate names in the same scope: `x is 1, x is 2`
 - Duplicate type names: `... called T` where `T` is already declared
 - Mixed types in a list: `[1, "hello", true]` (type error)
-- Literal `undefined` outside `is`/`is not` operand position: `x is undefined` (binding), `else undefined`, `when undefined`, etc. (type error — §4.5)
+- `undefined` as literal binding: `x is undefined` (type error — §4.5)
 - `undefined` in string interpolation: `"{env.MISSING}"`
 - `undefined` in arithmetic: `env.OFFSET + 1`
 - `is named` or `case named` on non-tagged-union values (for untagged unions, use `is type` / `case type` instead)
@@ -3708,7 +3685,7 @@ Conformant implementations **MUST** reject the following:
 - `called` inside control flow branches, parenthesized subexpressions, or nested contexts
 - Interpolation in `struct` import paths (paths must be static string literals)
 - Circular dependencies in data bindings (circular dependency error — §5.12)
-- Recursive function calls (direct or mutual — call graph must be DAG; circular dependency error — §3.8, §5.12)
+- Recursive function calls (direct or mutual — call graph must be DAG; circular dependency error — §5.12)
 - Function parameters without explicit `as` type annotation
 - Required parameter after a defaulted parameter
 - Comparing function values with `is` or `is not`
@@ -3720,17 +3697,21 @@ Conformant implementations **MUST** reject the following:
 
 The following behaviors are left to implementations (marked SHOULD or MAY throughout the spec):
 
-- **Float-to-string algorithm**: ECMAScript-style shortest representation is RECOMMENDED, but implementations MAY use alternative algorithms producing equivalent results (§5.11.2).
+- **Float-to-string algorithm**: The shortest round-trip decimal representation (§5.11.2) is **MUST** at conformance level Full. Implementations **MUST** produce byte-identical output for any given finite float value — including subnormals, edge cases near 10^n boundaries, and `-0.0`. Algorithms such as Ryū, Grisu3, and Schubfach are all valid choices; they produce identical output for the same input. Implementations at conformance level Basic **MAY** use simpler algorithms producing equivalent values (i.e., strings that parse back to the same IEEE 754 double) but possibly different byte sequences.
 - **Error message text**: Must include location (§11.2.0) but wording is implementation-defined. Non-programmer-friendly messages are RECOMMENDED.
 - **`std` shadowing warning**: Implementations SHOULD warn when `std` is shadowed (§5.16), but MAY remain silent.
-- **Import sandbox boundary**: Implementations MAY restrict import paths to a sandbox directory (§7.1). The boundary is implementation-defined.
-- **Absolute path imports**: Permitted by grammar, but implementations MAY reject them (§7.1).
-- **Multi-error reporting**: Implementations MAY report multiple errors or stop at the first (§11.2).
+- **Import sandbox boundary**: Default is the entry file's directory tree (§7.1, "standard sandbox profile"). Implementations MAY provide an opt-in mechanism to widen it; the default is normative.
+- **Absolute path imports**: Default is reject (§7.1). Implementations MAY provide an opt-in mechanism to allow them; the default is normative.
+- **Multi-error reporting**: Implementations **SHOULD** report multiple errors per pass — stopping at the first error degrades UX for editor/LSP integrations. Stopping at the first error is permitted but not recommended (§11.2).
 - **`@` escape suggestion in errors**: Implementations SHOULD suggest `@` escape for keyword-named bindings, but MAY omit (§11.2.0).
-- **Function parameter count**: No maximum arity is specified. Implementations MAY impose a limit and report a **runtime error** if exceeded.
-- **Import chain depth**: No maximum import nesting depth is specified. Implementations MAY impose a limit and report a **runtime error** if exceeded.
-- **Repetition count (`**`)**: No maximum count is specified. Implementations MAY impose a resource limit (§5.8.3).
-- **Non-transitive comparator in `std.sort`**: Output order is implementation-defined (§5.16.4).
+- **Function parameter count**: Implementations **MUST** support at least 32 parameters per function. Implementations MAY support more; they **MAY** impose a higher limit and report a **runtime error** if exceeded.
+- **Import chain depth**: Implementations **MUST** support at least 64 levels of import nesting. Implementations MAY support more; they **MAY** impose a higher limit and report a **runtime error** if exceeded.
+- **Repetition count (`**`)**: Implementations **MUST** support repetition counts up to 2^16 (65536) provided the resulting string or list fits in available memory. Implementations MAY support larger counts; they **MAY** impose a resource limit (§5.8.3) beyond the guaranteed floor.
+- **Struct field count**: Implementations **MUST** support at least 256 fields per struct literal or struct type declaration.
+- **List / tuple element count**: Implementations **MUST** support at least 2^16 (65536) elements in a single list or tuple literal.
+- **Enum / union / tagged union variant count**: Implementations **MUST** support at least 256 variants per declaration.
+- **`std.sort` stability**: `std.sort` **MUST** be stable — elements that compare equal under the supplied comparator **MUST** retain their relative input order in the output. This matches human-first intuition ("ties resolved by input order") and is required for determinism across implementations.
+- **Non-transitive comparator in `std.sort`**: Output order is implementation-defined (§5.16.4); `std.sort` **MUST** still terminate and **MUST NOT** error.
 
 ### 11.3 Conformance Test Suite
 
@@ -3943,36 +3924,6 @@ earth_radius_km is 6_371 as u16
 hex_marker is 0xFF
 binary_flags is 0b1010_0101
 permissions is 0o755
-
-// ── v0.10 feature showcase ──────────────────────────────────────
-// The declarations below use v0.10 features not exercised above:
-// standalone `struct`/`enum`/`tagged union` type declarations
-// (no inline initial value needed) and struct field defaults that
-// flow through to every binding of the named type.
-
-Role is enum astronomer, engineer, guest
-// ^ standalone enum — type name `Role`, first-variant default `astronomer`
-
-DefaultObserver is struct {
-    name is "unnamed" as string       // field default: "unnamed"
-    priority is 5 as u8                // field default: 5
-    role is astronomer as Role         // field default: astronomer
-}
-// ^ standalone struct with field defaults (v0.10 headline feature)
-
-MissionPhase is tagged union
-    planning as string,
-    active as string,
-    completed as null
-// ^ standalone tagged union — default is first variant's inner default
-// wrapped with first tag: `"" named planning`
-
-// Reuse: defaults flow from the declaration
-observer_default is DefaultObserver
-// ^ equals `{ name is "unnamed", priority is 5, role is astronomer }`
-
-observer_named is DefaultObserver with { name is "Dr. Okafor" }
-// ^ overrides only `name`; `priority` and `role` retain defaults
 ```
 
 ## Appendix B: UZON vs Other Formats and Configuration Languages
@@ -4147,7 +4098,7 @@ This appendix consolidates rules that are distributed across multiple sections i
 
 ### D.2 `undefined` Behavior Summary
 
-`undefined` is a **state** (not a value) resulting from accessing something that does not exist. Errors arising from `undefined` in operator contexts are **runtime errors** — they are suppressed in non-selected branches during speculative evaluation (§5.9), enabling patterns like `if x is undefined then 0 else x + 1`. In contrast, the **literal** `undefined` is restricted to `is` / `is not` comparison operands; using it in any other syntactic position (binding RHS, `if`/`case` branches, function body final, operand of other operators, etc.) is a **type error** (§4.5), always reported regardless of branch selection.
+`undefined` is a **state** (not a value) resulting from accessing something that does not exist. Errors arising from `undefined` in operator contexts are **runtime errors** — they are suppressed in non-selected branches during speculative evaluation (§5.9), enabling patterns like `if x is undefined then 0 else x + 1`. There are two exceptions where the literal `undefined` produces a **type error** (§4.5) instead, always reported regardless of branch selection: `x is undefined` as a binding value, and `when undefined then ...` as a `case` match pattern.
 
 | Context                                   | Behavior                                           | Reference    |
 | ----------------------------------------- | -------------------------------------------------- | ------------ |
@@ -4271,7 +4222,7 @@ Functions are **values** — they follow the same binding rules as all other val
 | `called` names function types    | Captures parameter types + return type as a named type                                                                  | §3.8         |
 | Type compatibility is structural | Same parameter types (in order) + same return type = compatible for `as`                                                | §3.8         |
 | Named function types are nominal | Two separately `called` function types with same signature are different                                                | §3.8, §3.2.1 |
-| `std` is an implicit binding     | Not a keyword — provides `len`, `reverse`, `get`, `hasKey`, `keys`, `values`, `all`, `any`, `filter`, `map`, `reduce`, `sort`, `isFinite`, `isInf`, `isNan`, `contains`, `endsWith`, `join`, `lower`, `replace`, `split`, `startsWith`, `trim`, `upper` | §5.16        |
+| `std` is an implicit binding     | Not a keyword — provides `len`, `reverse`, `get`, `hasKey`, `keys`, `values`, `all`, `any`, `filter`, `map`, `reduce`, `sort`, `isNan`, `isInf`, `isFinite`, `contains`, `endsWith`, `join`, `lower`, `replace`, `split`, `startsWith`, `trim`, `upper` | §5.16        |
 | `std` functions are pure         | Produce new values, guaranteed to terminate                                                                             | §5.16        |
 
 ---
