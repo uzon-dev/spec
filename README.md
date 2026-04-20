@@ -4,7 +4,7 @@
 
 UZON is a configuration and data language that combines the simplicity of JSON with the expressiveness of a typed language. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion.
 
-- **Specification Version**: 0.9 (Pre-release)
+- **Specification Version**: 0.10 (Pre-release)
 - **File Extension**: `.uzon`
 - **MIME Type**: `application/uzon`
 - **Encoding**: UTF-8
