@@ -486,6 +486,31 @@ base with { x is null }            // ✓ — null compatible (rule 3)
 
 **Exception for `null`**: `null` receives special treatment in `with` overrides. A field with value `null` (without explicit type annotation) may be overridden by a value of any type. Conversely, any typed field may be overridden with `null` to reset it to an empty state. This bidirectional `null` compatibility enables `null` as both a placeholder (type to be determined) and a reset mechanism (clear a previously set value). When the struct has a named type (via standalone declaration or `called`), the named type's field definitions take priority — a `null` field that was originally typed as `i32` in the named type can only be overridden with `i32` or `null`, not with an unrelated type like `string`.
 
+**Null-field override and per-instance field types**: When a named struct type declares a field as `null` **without explicit type annotation** (e.g., `flag is null` rather than `flag is null as i32`), the field is a **type-deferred placeholder**. Each construction site — whether via `with`, `plus`, or `as TypeName` conformance (§6.3) — independently chooses the underlying type of that field. Two instances of the same named struct type may therefore carry **different underlying types** at a deferred-null field without affecting their nominal identity. This is deliberate: the whole point of an untyped `null` placeholder is to defer the type decision to the use site.
+
+The consequence matters for **list homogeneity** (§3.4.2): a list of values of the same named struct type **is homogeneous** even when those values carry different underlying types at deferred-null fields — because list homogeneity uses the **nominal type** of each element (§3.4.2), and every element still has the same nominal type. The sparse-config idiom relies on this:
+
+```uzon
+Rule is struct {
+    name is ""
+    flag is null              // deferred-null field
+    data is null              // deferred-null field
+}
+
+rules is [
+    { name is "a", flag is true },                  // flag: bool
+    { name is "b", data is { key is 1 } },          // data: anonymous struct
+    { name is "c", flag is 42, data is "text" },    // flag: i64, data: string
+] as [Rule]
+// All three elements have nominal type Rule. Homogeneity holds.
+```
+
+Operators that inspect a deferred-null field's value behave per that field's **actual** underlying type at each instance — e.g., `rules.first.flag is type bool` is `true`, `rules.1.data is type string` is `false`. The `null` declaration in the type only constrains default behavior (field is `null` when omitted), not the set of types the field may hold across instances.
+
+The same rule applies **transitively** to nested named struct types — if `Rule.data` is declared as `data is null` and one instance sets `data is { a is 1, b is 2 }` while another sets `data is { a is 3 }`, the two inner anonymous structs may have **different shapes** and this is not an error. Each instance's `data` field independently adopts whatever type its use-site value has. List homogeneity on the outer list still holds via `Rule`'s nominal identity.
+
+Deferred-null fields **MUST NOT** be confused with **typed-null fields** (e.g., `x is null as i32`): a typed-null field has a fixed underlying type and can only be overridden with that type or `null`, per the rule above. The two forms are syntactically distinguished by the presence of `as TypeName` in the field declaration.
+
 ```uzon
 base is { api_key is null, port is 8080 as u16 }
 
