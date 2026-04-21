@@ -1,8 +1,8 @@
 # UZON Specification
 
-**Version**: 0.10  
+**Version**: 0.11  
 **Status**: Pre-release  
-**Date**: 2026-04-18  
+**Date**: 2026-04-21  
 **Author**: Suho Kang  
 **Repository**: [github.com/uzon-dev](https://github.com/uzon-dev)  
 **Website**: [uzon.dev](https://uzon.dev)
@@ -47,40 +47,209 @@ The specification is organized as follows:
 
 ## 1. Introduction
 
-UZON is a typed, human-writable configuration language. Every UZON document evaluates to a single, immutable value with no side effects, no loops, and no recursion. At its simplest, UZON reads like a data format — bindings associate names with values using the `is` keyword, and nothing more is needed. At its most expressive, UZON supports conditional expressions, name references, environment variable access, arithmetic, struct overrides and extensions, type declarations, file imports, functions, and a standard library of collection and numeric utilities. Everything in UZON is a value: primitives (booleans, integers, floats, strings, `null`), containers (structs, tuples, lists), sum types (enums, unions, tagged unions), and functions are all first-class values that can be bound, passed, and composed.
+UZON is a typed, human-centric configuration language. Every UZON document — a single `.uzon` file — evaluates to a single immutable value: an anonymous struct containing the file's top-level bindings. Evaluation is pure (no side effects), total (no recursion, no loops — every well-formed document terminates), and self-describing (every value carries its type). Everything in UZON is a value: primitives (booleans, integers, floats, strings, `null`), containers (structs, tuples, lists), sum types (enums, unions, tagged unions), and functions are all first-class values that can be bound, passed, and composed. The language is deliberately minimal — every construct earns its place — yet expressive enough to span conditionals, arithmetic, function abstraction, environment reads, and cross-file composition within a single grammar. For a comparison with JSON, TOML, YAML, Jsonnet, CUE, and Dhall, see Appendix B.
 
-A UZON file is an **anonymous struct**: a sequence of **bindings** at the top level. Each binding associates a name with a value using the `is` keyword. For a comparison with JSON, TOML, YAML, Jsonnet, CUE, and Dhall, see Appendix B.
+The following subsections describe UZON's distinguishing properties — natural-language readability, scale-continuity as projects grow, modular decomposition across files, direct correspondence with typed programming languages, deterministic evaluation, and an unambiguous syntactic surface — and close with a keyword role summary and notation conventions.
 
-### 1.1 Design Goals
+### 1.1 Natural-language readability
 
-1. **Self-describing**: Every value is unambiguously parseable without external type context.
-2. **Typed**: Rich primitive and compound types with named type reuse.
-3. **Cross-language**: Clean mapping to any mainstream programming language.
-4. **Expressive**: Conditionals, arithmetic, name references, and environment variables enable dynamic configuration.
-5. **Human-first**: English-like keywords (`is`, `from`, `called`, `as`, `to`, `named`, `enum`, `tagged`, `struct`, `union`) for readability.
-6. **Minimal**: Concise syntax; every construct earns its place.
+UZON uses English words as its operators — `is`, `are`, `as`, `to`, `of`, `from`, `with`, `plus`, `or else`, `when`, `then`, `else` — so a UZON document reads as the sentences that describe it.
 
-### 1.2 Keyword Role Summary
+Flat declarations read as plain statements of fact:
+
+```uzon
+package      is "hanriver"
+version      is "0.3.1"
+contributors are "Alice", "Bob", "Carol"
+released     is true
+```
+
+Typed values, conversions, and fallbacks compose as directed prose:
+
+```uzon
+Mode is enum dev, staging, prod
+
+port   is env.PORT to u16 or else 8080
+region is env.REGION or else "us-east-1"
+mode   is dev as Mode
+```
+
+Multi-branch dispatch follows the shape of an English conditional:
+
+```uzon
+severity is case exit_code
+    when 0 then "ok"
+    when 1 then "warning"
+    when 2 then "error"
+    else        "unknown"
+```
+
+This surface is the foundation of UZON's human-centric stance: every other property in this specification — composition, typing, evaluation semantics — is expressed in the same vocabulary, so the language an author writes is the language an auditor reads.
+
+### 1.2 Scale-continuity
+
+A UZON document may grow from a handful of bindings to a typed, composed, imported system without leaving the language. Every capability a growing configuration requires — comments, environment variables, conditionals, arithmetic, validation, composition, and abstraction — lives in the same grammar, type system, and evaluator:
+
+| Capability              | UZON mechanism                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| Comments                | `//` line comments (§2.2)                                                      |
+| Environment variables   | `env.VAR` (§5.13), composable with `or else` (§5.7) and `to` (§5.11)           |
+| Conditional evaluation  | `if` / `then` / `else` (§5.9); `case` with `when` / `type` / `named` (§5.10)   |
+| Arithmetic / string ops | native operators (§5.3), collection operators (§5.8), standard library (§5.16) |
+| Schema validation       | `as T` annotation (§6.1, §6.3), named type declarations (§3, §6.2)             |
+| Composition / overlays  | `with`, `plus` (§3.2), file import (§7)                                        |
+| Abstraction             | first-class functions (§3.8)                                                   |
+
+The document that begins as three lines of bindings and the document that ends as ten thousand lines of typed, composed, imported definitions are the same language processed by the same tool.
+
+### 1.3 Modular decomposition
+
+Any binding, any type declaration, and any struct value can be moved into a separate `.uzon` file, and each fragment is already a complete UZON document. Because a file evaluates to an anonymous struct (§7.2), a consumer imports the file as a struct value and references its contents through dot notation. Field extraction via `is of` (§5.14) accepts any member-access expression — including an inline file import — so a single field can be bound in one line without an intermediate name:
+
+```uzon
+timeout is of struct "./config"      // binds `timeout` from ./config.uzon
+```
+
+Named type declarations retain nominal identity across file boundaries — a type declared once is the same type wherever it is referenced through its declaring file (§7.3). A ten-thousand-line system is realized as a hundred hundred-line files whose dependencies are expressed in the same language as their contents.
+
+| Need                                   | UZON mechanism                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------- |
+| Import a file as a struct value        | `cfg is struct "./cfg"` (§7.1)                                                      |
+| Access a specific binding or type      | dot notation on the import: `cfg.port`, `cfg.Point` (§7.2)                          |
+| Extract one field into the local scope | `port is of cfg` — or, inline, `port is of struct "./cfg"` (§5.14)                  |
+| Export a single non-struct value       | wrap in a binding (conventionally `_`); read via `struct "./f"._` (§7.2 convention) |
+| Share a named type across files        | nominal identity preserved across imports (§7.3)                                    |
+| Validate a fragment in isolation       | any fragment is itself a complete UZON document                                     |
+
+#### Typical decomposition patterns
+
+**1. Base configuration with targeted overrides.** A base file holds defaults; deployment- or environment-specific files override individual fields with `with` (changing existing fields) or `plus` (adding new ones).
+
+```uzon
+// base.uzon
+host is "localhost"
+port is 8080
+tls  is false
+
+// prod.uzon
+config is struct "./base" with { host is "api.example.com", tls is true }
+
+// dev.uzon — add a field the base does not declare
+config is struct "./base" plus { verbose is true }
+```
+
+**2. Shared struct prototypes.** A common file provides prototype struct values that consumers override with `with` (changing existing fields) or `plus` (adding new ones). Every consumer starts from the same field layout and defaults, so shape drift across files is eliminated without declaring a named type.
+
+```uzon
+// defaults.uzon
+endpoint is { host is "" as string, port is 0 as u16 }
+
+// servers.uzon
+defaults is struct "./defaults"
+primary   is defaults.endpoint with { host is "a.local", port is 443 }
+secondary is defaults.endpoint with { host is "b.local", port is 443 }
+```
+
+**3. Function library.** Validators, clampers, and format helpers are defined once as function values and invoked from each consumer. Importing the file does not execute the function bodies — evaluation happens only at the call site.
+
+```uzon
+// math_utils.uzon
+clamp is function v as i32, lo as i32, hi as i32 returns i32 {
+    if v < lo then lo else if v > hi then hi else v
+}
+
+// config.uzon
+math is struct "./math_utils"
+brightness is math.clamp(env.BRIGHTNESS to i32 or else 50, 0, 100)
+```
+
+**4. Per-domain decomposition.** A large system is split by concern — networking, security, UI, storage — with each domain in its own file. The entry file imports each as a subsystem binding, and the resulting document reads as a directory of responsibilities rather than a monolith.
+
+```uzon
+// main.uzon
+network  is struct "./network"
+security is struct "./security"
+ui       is struct "./ui"
+storage  is struct "./storage"
+```
+
+**5. Centralized environment-variable contract.** All `env` reads, their typed coercions, and their defaults are collected in one file. Consumers extract only the fields they need, and every environment-derived value in the system has exactly one canonical definition.
+
+```uzon
+// env_contract.uzon
+port   is env.PORT to u16 or else 8080
+region is env.REGION or else "us-east-1"
+tls    is env.TLS is "true"
+
+// server.uzon
+env_config is struct "./env_contract"
+port   is of env_config
+region is of env_config
+tls    is of env_config
+```
+
+### 1.4 Direct correspondence with typed programming languages
+
+UZON's value categories correspond directly to the data constructs of mainstream typed programming languages. An evaluated document embeds into a consumer's native type system without structural rewriting, and the type information carried by the document is the type information the consumer receives.
+
+| UZON         | Rust                 | TypeScript           | Python                  | Zig            |
+| ------------ | -------------------- | -------------------- | ----------------------- | -------------- |
+| struct       | `struct`             | `interface` / object | `dataclass`             | `struct`       |
+| tuple        | tuple                | `[T, U]`             | `tuple`                 | tuple          |
+| list         | `Vec<T>`             | `T[]`                | `list[T]`               | `[]T`          |
+| enum         | unit-variant `enum`  | string literal union | `Enum`                  | `enum`         |
+| union        | wrapper `enum`       | `T \| U`             | `Union[T, U]`           | `union`        |
+| tagged union | data-carrying `enum` | discriminated union  | `Union` + `Literal` tag | tagged `union` |
+| function     | `fn` / closure       | function             | `Callable`              | `fn`           |
+| null         | `Option::None`       | `null`               | `None`                  | `null` / `?T`  |
+
+### 1.5 Deterministic, total evaluation
+
+UZON treats evaluation as a pure, total, deterministic function from a document — together with its imports and environment variables — to a single immutable value. Recursion and loops are forbidden outright; the combined dependency graph of binding references and function calls **MUST** be acyclic, and cycle detection is static (§5.12), so every well-formed document terminates. Evaluation produces no side effects: the only external inputs are file imports (§7) and `env` reads (§5.13), both explicit in source. Struct fields keep their declared order in the evaluated value — there is no merge-reordering step. Within a scope, bindings may reference one another regardless of textual position; the evaluator resolves references through the dependency DAG and rejects cycles before any value is computed.
+
+| Guarantee                         | Mechanism                                                          |
+| --------------------------------- | ------------------------------------------------------------------ |
+| Termination                       | no recursion, no loops; dependency DAG enforced statically (§5.12) |
+| Purity                            | inputs limited to file imports (§7) and `env` reads (§5.13)        |
+| Field-order preservation          | struct fields retain declaration order in the evaluated value      |
+| Order-independent authoring       | forward references resolved through the dependency DAG (§5.12)     |
+| Single specified evaluation model | no lazy/strict distinction exposed to the author                   |
+
+### 1.6 Unambiguous surface
+
+UZON's syntactic surface is unambiguous by design. Every literal is self-describing (§4): `yes` is an identifier or enum variant, `"yes"` is a string, and `true` is a boolean — no context turns one into another. Numeric types are explicit and width-specific: signed `i{N}` and unsigned `u{N}` for any bit width N in 0–65535, plus IEEE floats `f16`, `f32`, `f64`, `f80`, `f128` (§3.1). A literal that does not fit its declared type is a parse- or evaluation-time error, not a silent rounding — so a 12-bit sensor reading (`u12`), a 48-bit MAC address (`u48`), and a 256-bit hash (`u256`) are directly expressible rather than string-encoded. `null` is a typed value (§4.5); a missing binding is a distinct `undefined` state, coalesced only by `or else` (§5.7), while `is null` tests the value itself. The `as` keyword asserts identity (§6.1, §6.3); `to` is the only way to change a value's representation (§5.11). A file is exactly one anonymous struct (§7.2); syntax is brace/bracket-delimited and whitespace outside strings is insignificant (§2.1), with commas optional between bindings on separate lines (§8). The language is defined by a single specification with RFC 2119 normative keywords and explicit conformance levels (§11), so the same document behaves identically across conforming implementations.
+
+| Surface property                          | Mechanism                                                                     |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| Every literal self-describes its type     | identifiers, strings, and booleans are distinct tokens (§4)                   |
+| Numeric widths are explicit               | `i{N}` / `u{N}` for N in 0–65535; `f16`–`f128` (§3.1, §4.2)                   |
+| `null` is distinct from a missing binding | typed `null` (§4.5); `or else` coalesces only undefined (§5.7)                |
+| Annotation is separate from conversion    | `as` (identity assertion) vs `to` (representation change) (§5.11, §6.1)       |
+| A file is exactly one value               | one anonymous struct per file (§7.2)                                          |
+| Layout is author-controlled               | brace/bracket delimited; whitespace insignificant; commas optional (§2.1, §8) |
+| One specification governs behavior        | RFC 2119 keywords and explicit conformance levels (§11)                       |
+
+### 1.7 Keyword Role Summary
 
 UZON uses English words as operators. The type-related keywords have strictly separated roles:
 
-| Keyword | Role                               | English meaning                      | Example                          |
-| ------- | ---------------------------------- | ------------------------------------ | -------------------------------- |
-| `as`    | **Annotation** (assertion)         | "this value **as** a Type"           | `42 as i32`, `blue as RGB`       |
-| `to`    | **Conversion** (transformation)    | "convert this **to** a Type"         | `env.PORT to u16`, `3.14 to i32` |
-| `of`    | **Extraction** (field lookup)      | "this binding **is of** that struct" | `port is of config`              |
-| `type`  | **Type check** (runtime type test) | "this value **is type** that Type"   | `x is type i32`, `case type x` |
-| `from`  | **Inline definition** (enum/union) | "a variant **from** these choices"   | `red from red, green, blue`      |
-| `called`| **Inline type naming**             | "this type is **called** Name"       | `... called RGB`                 |
-| `named` | **Variant tagging / dispatch**     | "this value is **named** tag"        | `7 named ln from ...`, `pressed "enter" as Event` |
-| `enum`  | **Type declaration** (enum)        | "this is an **enum** type"           | `RGB is enum red, green, blue`   |
-| `union` | **Type declaration** (union)       | "this is a **union** type"           | `Flexible is union i32, string`  |
-| `tagged union` | **Type declaration** (tagged union) | "this is a **tagged union** type" | `Result is tagged union ...` |
-| `struct` | **Type declaration** (struct) / **Import** | "this is a **struct** type" / "import a file" | `Point is struct { ... }` / `cfg is struct "./config"` |
+| Keyword        | Role                                       | English meaning                               | Example                                                |
+| -------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------------------------------ |
+| `as`           | **Annotation** (assertion)                 | "this value **as** a Type"                    | `42 as i32`, `blue as RGB`                             |
+| `to`           | **Conversion** (transformation)            | "convert this **to** a Type"                  | `env.PORT to u16`, `3.14 to i32`                       |
+| `of`           | **Extraction** (field lookup)              | "this binding **is of** that struct"          | `port is of config`                                    |
+| `type`         | **Type check** (runtime type test)         | "this value **is type** that Type"            | `x is type i32`, `case type x`                         |
+| `from`         | **Inline definition** (enum/union)         | "a variant **from** these choices"            | `red from red, green, blue`                            |
+| `called`       | **Inline type naming**                     | "this type is **called** Name"                | `... called RGB`                                       |
+| `named`        | **Variant tagging / dispatch**             | "this value is **named** tag"                 | `7 named ln from ...`, `pressed "enter" as Event`      |
+| `enum`         | **Type declaration** (enum)                | "this is an **enum** type"                    | `RGB is enum red, green, blue`                         |
+| `union`        | **Type declaration** (union)               | "this is a **union** type"                    | `Flexible is union i32, string`                        |
+| `tagged union` | **Type declaration** (tagged union)        | "this is a **tagged union** type"             | `Result is tagged union ...`                           |
+| `struct`       | **Type declaration** (struct) / **Import** | "this is a **struct** type" / "import a file" | `Point is struct { ... }` / `cfg is struct "./config"` |
 
 `as` declares what a value already **is** — it does not change the value. If the value does not fit, it is an error. `to` transforms a value into a different representation — truncation, parsing, and format changes are expected. `of` extracts a field using the binding's own name as the key. `with` creates a new struct by overriding fields of an existing struct. `plus` creates a new struct by extending an existing struct with additional fields. `from` defines variants inline as part of a value expression. Standalone type declarations use `enum`, `union`, `tagged union`, or `struct` directly — the binding name becomes the type name. Note: UZON has several multi-token constructs. Six are **lexer-level composite tokens** emitted as single tokens: `or else`, `is not`, `is named`, `is not named`, `is type`, `is not type` (see §9 lexer rules). Three are **parser-level composites** formed from separate keyword tokens: `tagged union`, `case type`, `case named` (see §9 grammar productions).
 
-### 1.3 Notation Conventions
+### 1.8 Notation Conventions
 
 This specification uses Extended Backus–Naur Form (EBNF) for grammar definitions. In prose:
 
@@ -189,22 +358,22 @@ Any keyword may be escaped with `@`. The `@` is not part of the identifier name 
 
 The following identifiers are reserved:
 
-| Category         | Keywords                                                    |
-| ---------------- | ----------------------------------------------------------- |
-| Values           | `true`, `false`, `null`                                     |
-| Numeric          | `inf`, `nan`                                                |
-| State            | `undefined`                                                 |
-| Binding          | `is`, `are`                                                 |
+| Category         | Keywords                                                                           |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| Values           | `true`, `false`, `null`                                                            |
+| Numeric          | `inf`, `nan`                                                                       |
+| State            | `undefined`                                                                        |
+| Binding          | `is`, `are`                                                                        |
 | Type system      | `from`, `called`, `as`, `named`, `with`, `union`, `plus`, `type`, `enum`, `tagged` |
-| Conversion       | `to`                                                        |
-| Field extraction | `of`                                                        |
-| Logic            | `and`, `or`, `not`                                          |
-| Control          | `if`, `then`, `else`, `case`, `when`                        |
-| Environment      | `env`                                                       |
-| Import / Type    | `struct`                                                    |
-| Membership       | `in`                                                        |
-| Function         | `function`, `returns`, `default`                            |
-| Reserved         | `lazy`                                                      |
+| Conversion       | `to`                                                                               |
+| Field extraction | `of`                                                                               |
+| Logic            | `and`, `or`, `not`                                                                 |
+| Control          | `if`, `then`, `else`, `case`, `when`                                               |
+| Environment      | `env`                                                                              |
+| Import / Type    | `struct`                                                                           |
+| Membership       | `in`                                                                               |
+| Function         | `function`, `returns`, `default`                                                   |
+| Reserved         | `lazy`                                                                             |
 
 `lazy` is reserved for potential future use (e.g., deferred evaluation semantics). Its intended semantics are **deliberately unspecified** in this version — implementations **MUST** reject `lazy` as a syntax error if encountered in any non-identifier context. As with all keywords, `@lazy` may be used as a binding name via keyword escape (§2.4).
 
@@ -261,26 +430,26 @@ c is "value: {a}"     // INVALID — undefined reached string interpolation
 
 The following table defines how `undefined` interacts with every operator:
 
-| Operator                     | `undefined` Behavior     | Rationale                                                        |
-| ---------------------------- | ------------------------ | ---------------------------------------------------------------- |
-| `.` (member access)          | Propagates               | Implicit optional chaining                                       |
-| `of` (field extraction)      | Propagates               | Consistent with `.` member access (§5.14)                        |
-| `to` (conversion)            | Propagates               | Enables `env.X to u16 or else 8080`                              |
-| `with`                       | Runtime error            | Shape preservation requires a concrete struct                    |
-| `plus`                    | Runtime error            | Extension requires a concrete struct                             |
-| `as` (annotation)            | Propagates               | Type name is still validated; undefined value propagates         |
-| `or else`                    | Returns right operand    | Primary undefined resolution mechanism                           |
-| `is` / `is not`              | Permitted (returns bool) | Enables `x is undefined` checks                                  |
-| `+`, `-`, `*`, `/`, `%`, `^` | Runtime error            | Arithmetic on undefined is meaningless                           |
-| `**` (repetition)            | Runtime error            | Repetition requires concrete operands                            |
-| `++` (concatenation)         | Runtime error            | Concatenation requires concrete operands                         |
-| `<`, `<=`, `>`, `>=`         | Runtime error            | Ordering undefined is meaningless                                |
-| `and`, `or`, `not`           | Runtime error            | Requires bool, undefined is not bool                             |
-| `in`                         | Runtime error            | Membership requires concrete operands (both left and right)      |
-| `is named`                   | Runtime error            | Requires tagged union, not undefined                             |
-| `is type` / `is not type`    | Runtime error            | Requires a concrete value to check type                          |
-| String interpolation         | Runtime error            | Terminal context — must resolve first                            |
-| `case` match value           | Runtime error            | Cannot match against undefined                                   |
+| Operator                     | `undefined` Behavior                                       | Rationale                                                               |
+| ---------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `.` (member access)          | Propagates                                                 | Implicit optional chaining                                              |
+| `of` (field extraction)      | Propagates                                                 | Consistent with `.` member access (§5.14)                               |
+| `to` (conversion)            | Propagates                                                 | Enables `env.X to u16 or else 8080`                                     |
+| `with`                       | Runtime error                                              | Shape preservation requires a concrete struct                           |
+| `plus`                       | Runtime error                                              | Extension requires a concrete struct                                    |
+| `as` (annotation)            | Propagates                                                 | Type name is still validated; undefined value propagates                |
+| `or else`                    | Returns right operand                                      | Primary undefined resolution mechanism                                  |
+| `is` / `is not`              | Permitted (returns bool)                                   | Enables `x is undefined` checks                                         |
+| `+`, `-`, `*`, `/`, `%`, `^` | Runtime error                                              | Arithmetic on undefined is meaningless                                  |
+| `**` (repetition)            | Runtime error                                              | Repetition requires concrete operands                                   |
+| `++` (concatenation)         | Runtime error                                              | Concatenation requires concrete operands                                |
+| `<`, `<=`, `>`, `>=`         | Runtime error                                              | Ordering undefined is meaningless                                       |
+| `and`, `or`, `not`           | Runtime error                                              | Requires bool, undefined is not bool                                    |
+| `in`                         | Runtime error                                              | Membership requires concrete operands (both left and right)             |
+| `is named`                   | Runtime error                                              | Requires tagged union, not undefined                                    |
+| `is type` / `is not type`    | Runtime error                                              | Requires a concrete value to check type                                 |
+| String interpolation         | Runtime error                                              | Terminal context — must resolve first                                   |
+| `case` match value           | Runtime error                                              | Cannot match against undefined                                          |
 | `()` (function call)         | Runtime error (user functions); Propagates (std functions) | User-defined: undefined arg is error. std: undefined propagates (§5.16) |
 
 ### 3.2 Struct
@@ -542,14 +711,14 @@ z is base with { x is y }   // y → calling scope → 10
 
 **Error classification for `with`**:
 
-| Condition                                    | Error type    |
-| -------------------------------------------- | ------------- |
-| New field not in original struct             | Type error (detected during type checking)    |
-| Overridden field type incompatible           | Type error    |
-| Override expression evaluates to `undefined` | Runtime error |
-| Chaining (`a with { } with { }`)             | Syntax error  |
-| Base expression is not a struct              | Type error    |
-| Base expression evaluates to `undefined`     | Runtime error |
+| Condition                                    | Error type                                 |
+| -------------------------------------------- | ------------------------------------------ |
+| New field not in original struct             | Type error (detected during type checking) |
+| Overridden field type incompatible           | Type error                                 |
+| Override expression evaluates to `undefined` | Runtime error                              |
+| Chaining (`a with { } with { }`)             | Syntax error                               |
+| Base expression is not a struct              | Type error                                 |
+| Base expression evaluates to `undefined`     | Runtime error                              |
 
 #### 3.2.2 Struct Extension (`plus`)
 
@@ -592,12 +761,12 @@ extended as Point    // INVALID — different shape (3 fields vs 2)
 | Overridden field evaluates to `undefined` | Runtime error |
 | New field evaluates to `undefined`        | Runtime error |
 | Base expression is not a struct           | Type error    |
-| Chaining (`a plus { } plus { }`)    | Syntax error  |
+| Chaining (`a plus { } plus { }`)          | Syntax error  |
 | Base expression evaluates to `undefined`  | Runtime error |
 
 **`plus` vs `with`**:
 
-| Property        | `with`                      | `plus`                 |
+| Property        | `with`                      | `plus`                    |
 | --------------- | --------------------------- | ------------------------- |
 | Override fields | ✓                           | ✓ (optional)              |
 | Add new fields  | ✗ (error)                   | ✓ (at least one required) |
@@ -941,20 +1110,20 @@ A union **MUST** have at least two member types — a single-type union is equiv
 
 **Standalone type declaration** (`union`): The `union` keyword declares a named union type directly. The binding name becomes the type name. The binding's value is the **default value of the first member type**, determined as follows:
 
-| First member type | Default value |
-| ----------------- | ------------- |
-| Integer (`iN`, `uN`) | `0` |
-| Float (`fN`) | `0.0` |
-| `string` | `""` |
-| `bool` | `false` |
-| `null` | `null` |
-| List (`[T]`) | `[] as [T]` |
-| Tuple | `()` (empty tuple) |
-| Named enum | First variant |
-| Named struct | Struct with each field's value from its declaration |
-| Named tagged union | First variant's default with first tag |
-| Function | **Not permitted** — type error |
-| Union (nested) | **Not permitted** — type error |
+| First member type    | Default value                                       |
+| -------------------- | --------------------------------------------------- |
+| Integer (`iN`, `uN`) | `0`                                                 |
+| Float (`fN`)         | `0.0`                                               |
+| `string`             | `""`                                                |
+| `bool`               | `false`                                             |
+| `null`               | `null`                                              |
+| List (`[T]`)         | `[] as [T]`                                         |
+| Tuple                | `()` (empty tuple)                                  |
+| Named enum           | First variant                                       |
+| Named struct         | Struct with each field's value from its declaration |
+| Named tagged union   | First variant's default with first tag              |
+| Function             | **Not permitted** — type error                      |
+| Union (nested)       | **Not permitted** — type error                      |
 
 If the first member type is `function` or a nested anonymous union, the standalone declaration is a **type error** — use inline `from union` with an explicit value instead.
 
@@ -1375,17 +1544,17 @@ greet is function name as string returns string {
 
 **Error classification for functions**:
 
-| Condition                                    | Error type   |
-| -------------------------------------------- | ------------ |
-| Parameter without `as` type annotation       | Syntax error |
-| Required parameter after defaulted parameter | Syntax error |
-| Recursive call (direct or indirect)          | Circular dependency error |
-| Comparing functions with `is` / `is not`     | Type error   |
-| Ordering functions with `<` / `<=` / `>` / `>=` | Type error   |
-| Calling a non-function value                 | Type error   |
-| Wrong argument count                         | Type error   |
-| Argument type mismatch                       | Type error   |
-| Function body evaluates to wrong return type | Type error   |
+| Condition                                       | Error type                |
+| ----------------------------------------------- | ------------------------- |
+| Parameter without `as` type annotation          | Syntax error              |
+| Required parameter after defaulted parameter    | Syntax error              |
+| Recursive call (direct or indirect)             | Circular dependency error |
+| Comparing functions with `is` / `is not`        | Type error                |
+| Ordering functions with `<` / `<=` / `>` / `>=` | Type error                |
+| Calling a non-function value                    | Type error                |
+| Wrong argument count                            | Type error                |
+| Argument type mismatch                          | Type error                |
+| Function body evaluates to wrong return type    | Type error                |
 
 ---
 
@@ -1737,26 +1906,26 @@ Comparison operators return `bool`. Both operands **MUST** be the same type. The
 
 Operator and suffix precedence (highest to lowest):
 
-| Precedence  | Operator / Suffix                          | Category                         | Assoc. |
-| ----------- | ------------------------------------------ | -------------------------------- | ------ |
-| 1 (highest) | `.name`, `.0`, `.first`~`.tenth`, `(args)` | Member access / Function call    | left   |
-| 2           | `to`                                       | Type conversion                  | —      |
-| 3           | `with`, `plus`                             | Struct override / extension      | —      |
-| 4           | `as`                                       | Type annotation                  | —      |
-| 5           | `from`, `named`                            | Enum / Union / Tagged union      | —      |
-| *           | `called`                                   | Type naming (**binding level only** — not an expression operator) | —      |
-| 6           | `^`                                        | Exponentiation                   | right  |
-| 7           | unary `-`                                  | Negation                         | —      |
-| 8           | `*`, `/`, `%`, `**`                        | Multiplicative / Repetition      | left   |
-| 9           | `+`, `-`                                   | Additive                         | left   |
-| 10          | `++`                                       | Concatenation                    | left   |
-| 11          | `<`, `<=`, `>`, `>=`                       | Comparison                       | —      |
-| 12          | `in`                                       | Membership                       | —      |
-| 13          | `is`, `is not`, `is named`, `is not named`, `is type`, `is not type` | Equality / Variant / Type check  | —      |
-| 14          | `not`                                      | Logical NOT                      | right  |
-| 15          | `and`                                      | Logical AND                      | left   |
-| 16          | `or`                                       | Logical OR                       | left   |
-| 17 (lowest) | `or else`                                  | Undefined coalescing             | left   |
+| Precedence  | Operator / Suffix                                                    | Category                                                          | Assoc. |
+| ----------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- | ------ |
+| 1 (highest) | `.name`, `.0`, `.first`~`.tenth`, `(args)`                           | Member access / Function call                                     | left   |
+| 2           | `to`                                                                 | Type conversion                                                   | —      |
+| 3           | `with`, `plus`                                                       | Struct override / extension                                       | —      |
+| 4           | `as`                                                                 | Type annotation                                                   | —      |
+| 5           | `from`, `named`                                                      | Enum / Union / Tagged union                                       | —      |
+| *           | `called`                                                             | Type naming (**binding level only** — not an expression operator) | —      |
+| 6           | `^`                                                                  | Exponentiation                                                    | right  |
+| 7           | unary `-`                                                            | Negation                                                          | —      |
+| 8           | `*`, `/`, `%`, `**`                                                  | Multiplicative / Repetition                                       | left   |
+| 9           | `+`, `-`                                                             | Additive                                                          | left   |
+| 10          | `++`                                                                 | Concatenation                                                     | left   |
+| 11          | `<`, `<=`, `>`, `>=`                                                 | Comparison                                                        | —      |
+| 12          | `in`                                                                 | Membership                                                        | —      |
+| 13          | `is`, `is not`, `is named`, `is not named`, `is type`, `is not type` | Equality / Variant / Type check                                   | —      |
+| 14          | `not`                                                                | Logical NOT                                                       | right  |
+| 15          | `and`                                                                | Logical AND                                                       | left   |
+| 16          | `or`                                                                 | Logical OR                                                        | left   |
+| 17 (lowest) | `or else`                                                            | Undefined coalescing                                              | left   |
 
 Operators marked "—" in associativity do not chain (at most one per expression level).
 
@@ -2155,19 +2324,19 @@ Environment variables referenced through `env` are always `string`, so `to` is c
 
 The following table defines **all** permitted `to` conversions. Any conversion not listed is a **type error**. Target types not shown in the table (struct, tuple, list, tagged union, untagged union, function) are **never** valid `to` targets — converting to these types is always a type error. The `undefined` row is included for completeness — `undefined` propagates through `to` regardless of target type (§5.11).
 
-| Source → Target       | integer             | float              | `string`                  | `bool`     | `null`     | named enum    |
-| --------------------- | ------------------- | ------------------ | ------------------------- | ---------- | ---------- | ------------- |
+| Source → Target       | integer                       | float                | `string`                  | `bool`     | `null`     | named enum    |
+| --------------------- | ----------------------------- | -------------------- | ------------------------- | ---------- | ---------- | ------------- |
 | integer               | ✓ identity/widening/narrowing | ✓ may lose precision | ✓ decimal                 | ✗          | ✗          | ✗             |
-| float                 | ✓ truncates decimal | ✓ precision change | ✓ decimal                 | ✗          | ✗          | ✗             |
-| `string`              | ✓ parse literal     | ✓ parse literal    | ✓ identity                | ✗          | ✗          | ✓ exact match |
-| `bool`                | ✗                   | ✗                  | ✓ `"true"`/`"false"`      | ✓ identity | ✗          | ✗             |
-| `null`                | ✗                   | ✗                  | ✓ `"null"`                | ✗          | ✓ identity | ✗             |
-| enum                  | ✗                   | ✗                  | ✓ variant name            | ✗          | ✗          | ✗             |
-| tagged union          | ✗                   | ✗                  | ✓ inner value `to string` | ✗          | ✗          | ✗             |
-| union (untagged)      | ✗                   | ✗                  | ✓ inner value `to string` | ✗          | ✗          | ✗             |
-| struct / tuple / list | ✗                   | ✗                  | ✗                         | ✗          | ✗          | ✗             |
-| function              | ✗                   | ✗                  | ✗                         | ✗          | ✗          | ✗             |
-| `undefined`           | propagates          | propagates         | propagates                | propagates | propagates | propagates    |
+| float                 | ✓ truncates decimal           | ✓ precision change   | ✓ decimal                 | ✗          | ✗          | ✗             |
+| `string`              | ✓ parse literal               | ✓ parse literal      | ✓ identity                | ✗          | ✗          | ✓ exact match |
+| `bool`                | ✗                             | ✗                    | ✓ `"true"`/`"false"`      | ✓ identity | ✗          | ✗             |
+| `null`                | ✗                             | ✗                    | ✓ `"null"`                | ✗          | ✓ identity | ✗             |
+| enum                  | ✗                             | ✗                    | ✓ variant name            | ✗          | ✗          | ✗             |
+| tagged union          | ✗                             | ✗                    | ✓ inner value `to string` | ✗          | ✗          | ✗             |
+| union (untagged)      | ✗                             | ✗                    | ✓ inner value `to string` | ✗          | ✗          | ✗             |
+| struct / tuple / list | ✗                             | ✗                    | ✗                         | ✗          | ✗          | ✗             |
+| function              | ✗                             | ✗                    | ✗                         | ✗          | ✗          | ✗             |
+| `undefined`           | propagates                    | propagates           | propagates                | propagates | propagates | propagates    |
 
 **Table note**: The integer→integer cell bundles three distinct behaviors: identity (same width, no-op), widening (smaller→larger, always valid), and narrowing (larger→smaller, range-checked). The integer→float cell permits all conversions but is **not** always lossless — large integers may exceed the target float's precision and round silently, and extreme values may produce `inf`. See **Key rules** below for details.
 
@@ -2462,32 +2631,32 @@ UZON provides a set of built-in functions through `std` — an implicit top-leve
 
 **Shadowing**: Because `std` is a binding (not a keyword), it follows normal lexical scope rules. A user declaration `std is { ... }` shadows the built-in `std` — subsequent `std.map(...)` calls resolve against the user's struct, not the built-in library. If the user's struct does not contain the expected function, the result is `undefined` (missing field) or a type error (calling a non-function). Implementations **SHOULD** emit a warning when `std` is shadowed.
 
-| Category              | Function      | Signature                       | Returns    |
-| --------------------- | ------------- | ------------------------------- | ---------- |
-| Collection & String   | `len`         | `(collection_or_string)`        | `i64`      |
-|                       | `reverse`     | `(list_or_string)`              | same type  |
-| Collection Query      | `get`         | `(collection, index_or_key)`    | element    |
-|                       | `hasKey`      | `(struct, key)`                 | `bool`     |
-|                       | `keys`        | `(struct)`                      | `[string]` |
-|                       | `values`      | `(struct)`                      | tuple      |
-| Collection Predicate  | `all`         | `(list, func)`                  | `bool`     |
-|                       | `any`         | `(list, func)`                  | `bool`     |
-| Collection Transform  | `filter`      | `(list, func)`                  | `[T]`      |
-|                       | `map`         | `(list, func)`                  | `[U]`      |
-|                       | `reduce`      | `(list, initial, func)`         | `U`        |
-|                       | `sort`        | `(list, comparator)`            | `[T]`      |
-| Numeric               | `isFinite`    | `(float)`                       | `bool`     |
-|                       | `isInf`       | `(float)`                       | `bool`     |
-|                       | `isNan`       | `(float)`                       | `bool`     |
-| String                | `contains`    | `(string, substring)`           | `bool`     |
-|                       | `endsWith`    | `(string, suffix)`              | `bool`     |
-|                       | `join`        | `([string], separator)`         | `string`   |
-|                       | `lower`       | `(string)`                      | `string`   |
-|                       | `replace`     | `(string, target, replacement)` | `string`   |
-|                       | `split`       | `(string, delimiter)`           | `[string]` |
-|                       | `startsWith`  | `(string, prefix)`              | `bool`     |
-|                       | `trim`        | `(string)`                      | `string`   |
-|                       | `upper`       | `(string)`                      | `string`   |
+| Category             | Function     | Signature                       | Returns    |
+| -------------------- | ------------ | ------------------------------- | ---------- |
+| Collection & String  | `len`        | `(collection_or_string)`        | `i64`      |
+|                      | `reverse`    | `(list_or_string)`              | same type  |
+| Collection Query     | `get`        | `(collection, index_or_key)`    | element    |
+|                      | `hasKey`     | `(struct, key)`                 | `bool`     |
+|                      | `keys`       | `(struct)`                      | `[string]` |
+|                      | `values`     | `(struct)`                      | tuple      |
+| Collection Predicate | `all`        | `(list, func)`                  | `bool`     |
+|                      | `any`        | `(list, func)`                  | `bool`     |
+| Collection Transform | `filter`     | `(list, func)`                  | `[T]`      |
+|                      | `map`        | `(list, func)`                  | `[U]`      |
+|                      | `reduce`     | `(list, initial, func)`         | `U`        |
+|                      | `sort`       | `(list, comparator)`            | `[T]`      |
+| Numeric              | `isFinite`   | `(float)`                       | `bool`     |
+|                      | `isInf`      | `(float)`                       | `bool`     |
+|                      | `isNan`      | `(float)`                       | `bool`     |
+| String               | `contains`   | `(string, substring)`           | `bool`     |
+|                      | `endsWith`   | `(string, suffix)`              | `bool`     |
+|                      | `join`       | `([string], separator)`         | `string`   |
+|                      | `lower`      | `(string)`                      | `string`   |
+|                      | `replace`    | `(string, target, replacement)` | `string`   |
+|                      | `split`      | `(string, delimiter)`           | `[string]` |
+|                      | `startsWith` | `(string, prefix)`              | `bool`     |
+|                      | `trim`       | `(string)`                      | `string`   |
+|                      | `upper`      | `(string)`                      | `string`   |
 
 #### 5.16.1 Collection & String
 
@@ -3031,24 +3200,24 @@ This file-boundary isolation ensures that a file's behavior is identical whether
 
 **Identity stamping**: Implementations **MUST** maintain a nominal identity for each named type that survives operations on values of that type. The identity is conceptually the pair `(declaring file's canonical path, type name)` but implementations **MAY** use any equivalent representation (e.g., interning type descriptors by canonical path + name, or qualified-name strings like `"path/to/mod.uzon#Point"`). The representation is implementation-defined; the **preservation behavior** across operations is normative:
 
-| Operation on a value of named type `T` | Result's nominal type |
-|---|---|
-| `v` (bare reference, alias binding) | `T` — preserved |
-| `v.field` (member access, non-nominal field) | field's declared type (may be different) |
-| `v.field` (member access, nominal field) | field's declared named type, preserved |
-| `v as T` (identity annotation) | `T` — no-op |
-| `v with { ... }` | `T` — preserved (§3.2.1 value-copy) |
-| `v plus { ... }` | **anonymous** — new shape, `T` dropped (§3.2.2) |
-| `[v, v, ...]` (list of `T` values) | `[T]` — preserved per element |
-| `std.reverse(v)` where `v` is `[T]` | `[T]` — preserved (§5.16) |
-| `std.filter(v, f)` where `v` is `[T]` | `[T]` — preserved |
-| `std.sort(v, cmp)` where `v` is `[T]` | `[T]` — preserved |
-| `std.map(v, f)` | **anonymous** `[U]` where `U` is `f`'s return type |
-| `std.reduce(v, init, f)` | `f`'s return type (not list-typed) |
-| Imported struct value from `_mod.v` | original `T` from `_mod`'s declaring file |
-| Function return value of declared type `T` | `T` — preserved |
-| `case` / `if` branch result | the common named type if all branches agree; anonymous otherwise |
-| `or else` result | left operand's type (which is `T` if left is `T`) |
+| Operation on a value of named type `T`       | Result's nominal type                                            |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| `v` (bare reference, alias binding)          | `T` — preserved                                                  |
+| `v.field` (member access, non-nominal field) | field's declared type (may be different)                         |
+| `v.field` (member access, nominal field)     | field's declared named type, preserved                           |
+| `v as T` (identity annotation)               | `T` — no-op                                                      |
+| `v with { ... }`                             | `T` — preserved (§3.2.1 value-copy)                              |
+| `v plus { ... }`                             | **anonymous** — new shape, `T` dropped (§3.2.2)                  |
+| `[v, v, ...]` (list of `T` values)           | `[T]` — preserved per element                                    |
+| `std.reverse(v)` where `v` is `[T]`          | `[T]` — preserved (§5.16)                                        |
+| `std.filter(v, f)` where `v` is `[T]`        | `[T]` — preserved                                                |
+| `std.sort(v, cmp)` where `v` is `[T]`        | `[T]` — preserved                                                |
+| `std.map(v, f)`                              | **anonymous** `[U]` where `U` is `f`'s return type               |
+| `std.reduce(v, init, f)`                     | `f`'s return type (not list-typed)                               |
+| Imported struct value from `_mod.v`          | original `T` from `_mod`'s declaring file                        |
+| Function return value of declared type `T`   | `T` — preserved                                                  |
+| `case` / `if` branch result                  | the common named type if all branches agree; anonymous otherwise |
+| `or else` result                             | left operand's type (which is `T` if left is `T`)                |
 
 **Multi-hop identity preservation**: When a value crosses multiple file boundaries via import chains (e.g., `main` imports `util`, `util` imports `shared`, `shared.Point` is imported transitively as `main.util.shared.Point`), the value's nominal identity **MUST** remain bound to the **original declaring file** (`shared.uzon`), not to any intermediate re-exporting file. Two values of type `shared.Point` obtained via different import chains are the **same** nominal type. This requires implementations to stamp identity at the declaring site, not at any import site.
 
@@ -3058,25 +3227,25 @@ This file-boundary isolation ensures that a file's behavior is identical whether
 
 **Type name preservation table**: The following table specifies which operations preserve a value's named type identity and which produce anonymous or fresh-named values. This is normative — implementations that strip or mint type names differently violate nominal identity.
 
-| Operation                                               | Named type preserved? | Notes                                                           |
-|---------------------------------------------------------|-----------------------|-----------------------------------------------------------------|
-| Binding copy: `b is a` where `a` has named type `T`     | ✓ (same `T`)          | Identity is a property of the value, not the binding.           |
-| `as T` (adoption of anonymous to named)                 | ✓ (adopts `T`)        | §6.3.                                                           |
-| `as T` (named `T` adopted as the same `T`)              | ✓ (identity)          | No-op — value already has type `T`.                             |
-| `as U` where `U ≠ T`                                    | ✓ (changes to `U`)    | Conformance-checked per §6.3 — structural fields must match.    |
-| `with { ... }` on named `T`                             | ✓ (same `T`)          | §3.2.1 — result is `T` with overrides.                          |
-| `plus { ... }` on named `T`                             | ✗ (anonymous)         | §3.2.2 — result is a new shape; use `as NewType` to re-name.    |
-| Import: reference across files preserves original identity | ✓                    | §7.3 — (path, name) pair carries through.                       |
-| Function argument: passing a named `T` value            | ✓                    | Parameter receives the same identity.                           |
-| Function return: returning a named `T` value            | ✓                    | Caller receives the same identity.                              |
-| `std.reverse`/`std.filter`/`std.sort` on `[T]`          | ✓                    | §5.16 — named list type preserved.                              |
-| `std.map` on `[T]`                                      | ✗ (anonymous `[U]`)   | §5.16 — element type may change; use `as [NewType]` to re-name. |
-| `std.reduce`                                            | N/A                   | §5.16 — result is a non-list value; named-list preservation N/A.|
-| `with`/`plus` producing a union member                  | ✓ (if member is named)| Member's named identity is preserved.                           |
-| Tuple/list literal containing named values              | ✓                     | Named element identities preserved independently.               |
-| String interpolation (`{expr}`)                         | N/A                   | Converts to string — type identity discarded.                   |
-| `to string`                                             | N/A                   | §5.11.2 — result is a string value.                             |
-| `to T` (conversion) where `T` is a primitive            | No (result type is `T`)| §5.11 — conversion replaces the type, not a preservation.      |
+| Operation                                                  | Named type preserved?   | Notes                                                            |
+| ---------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| Binding copy: `b is a` where `a` has named type `T`        | ✓ (same `T`)            | Identity is a property of the value, not the binding.            |
+| `as T` (adoption of anonymous to named)                    | ✓ (adopts `T`)          | §6.3.                                                            |
+| `as T` (named `T` adopted as the same `T`)                 | ✓ (identity)            | No-op — value already has type `T`.                              |
+| `as U` where `U ≠ T`                                       | ✓ (changes to `U`)      | Conformance-checked per §6.3 — structural fields must match.     |
+| `with { ... }` on named `T`                                | ✓ (same `T`)            | §3.2.1 — result is `T` with overrides.                           |
+| `plus { ... }` on named `T`                                | ✗ (anonymous)           | §3.2.2 — result is a new shape; use `as NewType` to re-name.     |
+| Import: reference across files preserves original identity | ✓                       | §7.3 — (path, name) pair carries through.                        |
+| Function argument: passing a named `T` value               | ✓                       | Parameter receives the same identity.                            |
+| Function return: returning a named `T` value               | ✓                       | Caller receives the same identity.                               |
+| `std.reverse`/`std.filter`/`std.sort` on `[T]`             | ✓                       | §5.16 — named list type preserved.                               |
+| `std.map` on `[T]`                                         | ✗ (anonymous `[U]`)     | §5.16 — element type may change; use `as [NewType]` to re-name.  |
+| `std.reduce`                                               | N/A                     | §5.16 — result is a non-list value; named-list preservation N/A. |
+| `with`/`plus` producing a union member                     | ✓ (if member is named)  | Member's named identity is preserved.                            |
+| Tuple/list literal containing named values                 | ✓                       | Named element identities preserved independently.                |
+| String interpolation (`{expr}`)                            | N/A                     | Converts to string — type identity discarded.                    |
+| `to string`                                                | N/A                     | §5.11.2 — result is a string value.                              |
+| `to T` (conversion) where `T` is a primitive               | No (result type is `T`) | §5.11 — conversion replaces the type, not a preservation.        |
 
 **Import shadowing**: If the importing file declares a binding with the same name as the import binding, the local binding shadows the import — normal lexical scoping applies. The imported file's bindings are only accessible through the import binding's dot notation (`imported.field`), so shadowing the import binding itself makes the imported file's contents inaccessible (unless another binding references it).
 
@@ -3588,7 +3757,7 @@ A UZON file is an anonymous struct containing zero or more bindings.
 | Level            | Requirements                                                                |
 | ---------------- | --------------------------------------------------------------------------- |
 | **Parser**       | MUST parse all syntactically valid documents per §9.                        |
-| **Evaluator**    | MUST evaluate all expressions per §5. MUST resolve identifiers and `env`.        |
+| **Evaluator**    | MUST evaluate all expressions per §5. MUST resolve identifiers and `env`.   |
 | **Type-checker** | MUST validate `as` annotations, `called`/`as` type reuse, `to` conversions. |
 | **Full**         | Parser + Evaluator + Type-checker.                                          |
 
@@ -3637,13 +3806,13 @@ Good: Line 5: 'port' needs a number, but you gave it a text value ("8080").
 
 **Canonical error-class prefix (RECOMMENDED)**: To aid conformance testing and tool integration, implementations **SHOULD** prefix error messages with one of the following canonical class tokens, followed by `:` and a space:
 
-| Prefix | Class | Examples |
-|---|---|---|
-| `SyntaxError:` | Lexical or grammatical errors | unmatched quote, bad escape, unexpected token |
-| `CircularError:` | Dependency cycles | binding cycle, import cycle, mutual type recursion |
-| `TypeError:` | Type-checking failures | field shape mismatch, wrong variant inner type, non-conformant `as` |
-| `RuntimeError:` | Evaluation failures | overflow, division by zero, `undefined` in terminal context |
-| `ImportError:` | Import-resolution failures | file not found, dangling symlink, absolute path without opt-in, sandbox violation |
+| Prefix           | Class                         | Examples                                                                          |
+| ---------------- | ----------------------------- | --------------------------------------------------------------------------------- |
+| `SyntaxError:`   | Lexical or grammatical errors | unmatched quote, bad escape, unexpected token                                     |
+| `CircularError:` | Dependency cycles             | binding cycle, import cycle, mutual type recursion                                |
+| `TypeError:`     | Type-checking failures        | field shape mismatch, wrong variant inner type, non-conformant `as`               |
+| `RuntimeError:`  | Evaluation failures           | overflow, division by zero, `undefined` in terminal context                       |
+| `ImportError:`   | Import-resolution failures    | file not found, dangling symlink, absolute path without opt-in, sandbox violation |
 
 This prefix is a conformance-suite affordance: tests can assert "rejected with prefix `TypeError:`" without constraining the rest of the human-readable message. Implementations that prefer fully human-phrased messages may prepend the canonical prefix only when a machine-readable output mode is requested (e.g., `--machine-readable` flag, JSON output format). The prefix is **RECOMMENDED**, not **MUST** — implementations targeting end-users who never interact with test suites may omit it.
 
@@ -3934,76 +4103,76 @@ Legend: ✓ full support, ◐ partial or limited support, ✗ not supported, N/A
 
 ### B.1 Data Format Basics
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| Comments                      | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
-| Trailing commas¹              | ✓    | ✗    | ◐    | N/A  | ✓      | ✓   | ✓     |
-| Integer bases (hex/oct/bin)   | ✓    | ✗    | ✓    | ✓    | ✗       | ✓   | ✗     |
-| Multiline strings             | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
-| String interpolation          | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Unicode identifiers           | ✓    | N/A  | ✗    | ✓    | ✗       | ✗   | ✗     |
-| Self-describing (keys visible in source) | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓     |
+| Feature                                  | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| ---------------------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| Comments                                 | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
+| Trailing commas¹                         | ✓    | ✗    | ◐    | N/A  | ✓       | ✓   | ✓     |
+| Integer bases (hex/oct/bin)              | ✓    | ✗    | ✓    | ✓    | ✗       | ✓   | ✗     |
+| Multiline strings                        | ✓    | ✗    | ✓    | ✓    | ✓       | ✓   | ✓     |
+| String interpolation                     | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Unicode identifiers                      | ✓    | N/A  | ✗    | ✓    | ✗       | ✗   | ✗     |
+| Self-describing (keys visible in source) | ✓    | ✓    | ✓    | ◐    | ✓       | ✓   | ✓     |
 
 ¹ TOML permits trailing commas only in arrays, not in inline tables.
 
 ### B.2 Data Types
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| Static type declarations      | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓     |
-| Named/reusable types          | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓     |
-| Enums                         | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ◐ (unions) |
-| Untagged unions               | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✗     |
-| Tagged unions (sum types)     | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✓     |
-| Tuples (heterogeneous, fixed-length) | ✓ | ✗ | ✗ | ✗    | ✗       | ✗   | ✗     |
-| Sized integers (i8, u32 etc.) | ✓    | ✗    | ✗    | ✗    | ✗       | ◐   | ✗     |
-| Distinct null vs undefined    | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✗     |
-| Optional / nullable values    | ✓    | ◐    | ✗    | ✓    | ✓       | ✓   | ✓     |
+| Feature                              | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall      |
+| ------------------------------------ | ---- | ---- | ---- | ---- | ------- | --- | ---------- |
+| Static type declarations             | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓          |
+| Named/reusable types                 | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✓          |
+| Enums                                | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ◐ (unions) |
+| Untagged unions                      | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✗          |
+| Tagged unions (sum types)            | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✓          |
+| Tuples (heterogeneous, fixed-length) | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✗          |
+| Sized integers (i8, u32 etc.)        | ✓    | ✗    | ✗    | ✗    | ✗       | ◐   | ✗          |
+| Distinct null vs undefined           | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ✗          |
+| Optional / nullable values           | ✓    | ◐    | ✗    | ✓    | ✓       | ✓   | ✓          |
 
 ### B.3 Expressions and Logic
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| Arithmetic                    | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Conditionals (if/then/else)   | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Case / pattern dispatch       | ✓    | ✗    | ✗    | ✗    | ✗       | ✗   | ◐ (merge) |
-| String/list concatenation     | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Type conversion               | ✓    | ✗    | ✗    | ✗    | ◐       | ✓   | ◐     |
-| Membership testing (`in`)     | ✓    | ✗    | ✗    | ✗    | ✗       | ✓   | ✗     |
-| Field extraction shorthand    | ✓ (`of`) | ✗ | ✗ | ✗   | ✗       | ✗   | ✗     |
+| Feature                     | UZON     | JSON | TOML | YAML | Jsonnet | CUE | Dhall     |
+| --------------------------- | -------- | ---- | ---- | ---- | ------- | --- | --------- |
+| Arithmetic                  | ✓        | ✗    | ✗    | ✗    | ✓       | ✓   | ✓         |
+| Conditionals (if/then/else) | ✓        | ✗    | ✗    | ✗    | ✓       | ✓   | ✓         |
+| Case / pattern dispatch     | ✓        | ✗    | ✗    | ✗    | ✗       | ✗   | ◐ (merge) |
+| String/list concatenation   | ✓        | ✗    | ✗    | ✗    | ✓       | ✓   | ✓         |
+| Type conversion             | ✓        | ✗    | ✗    | ✗    | ◐       | ✓   | ◐         |
+| Membership testing (`in`)   | ✓        | ✗    | ✗    | ✗    | ✗       | ✓   | ✗         |
+| Field extraction shorthand  | ✓ (`of`) | ✗    | ✗    | ✗    | ✗       | ✗   | ✗         |
 
 ### B.4 Computation and Safety
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| User-defined functions        | ✓    | ✗    | ✗    | ✗    | ✓       | ✗   | ✓     |
-| Standard library (built-ins)  | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Recursion (direct or mutual)  | ✗    | N/A  | N/A  | N/A  | ✓       | ✗   | ✗     |
-| Turing-complete               | ✗    | ✗    | ✗    | ✗    | ✓       | ✗   | ✗     |
-| Termination guaranteed        | ✓    | ✓    | ✓    | ✓    | ✗       | ✓   | ✓     |
-| Pure evaluation (no side effects) | ✓ | N/A | N/A | N/A | ✓       | ✓   | ✓     |
-| Deterministic output          | ✓    | ✓    | ✓    | ◐    | ✓       | ✓   | ✓     |
+| Feature                           | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
+| --------------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
+| User-defined functions            | ✓    | ✗    | ✗    | ✗    | ✓       | ✗   | ✓     |
+| Standard library (built-ins)      | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
+| Recursion (direct or mutual)      | ✗    | N/A  | N/A  | N/A  | ✓       | ✗   | ✗     |
+| Turing-complete                   | ✗    | ✗    | ✗    | ✗    | ✓       | ✗   | ✗     |
+| Termination guaranteed            | ✓    | ✓    | ✓    | ✓    | ✗       | ✓   | ✓     |
+| Pure evaluation (no side effects) | ✓    | N/A  | N/A  | N/A  | ✓       | ✓   | ✓     |
+| Deterministic output              | ✓    | ✓    | ✓    | ◐    | ✓       | ✓   | ✓     |
 
 ### B.5 Composition
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| Struct override (same fields) | ✓ (`with`) | ✗ | ✗ | ◐ (anchors) | ✓ (`+`)   | ✓ (unification) | ✓ (`⫽`) |
-| Struct extension (new fields) | ✓ (`plus`) | ✗ | ✗ | ◐       | ✓       | ✓   | ✓     |
-| Forward references (any order) | ✓   | ✗    | ✗    | ◐    | ✓       | ✓   | ✓     |
-| Inheritance / mixins          | ✗    | ✗    | ✗    | ◐    | ✓       | ✓   | ✗     |
-| Self-references (within doc)  | ✓ (named bindings) | ✗ | ✗ | ✓ (anchors) | ✓ | ✓ | ✓ |
+| Feature                        | UZON               | JSON | TOML | YAML        | Jsonnet | CUE             | Dhall   |
+| ------------------------------ | ------------------ | ---- | ---- | ----------- | ------- | --------------- | ------- |
+| Struct override (same fields)  | ✓ (`with`)         | ✗    | ✗    | ◐ (anchors) | ✓ (`+`) | ✓ (unification) | ✓ (`⫽`) |
+| Struct extension (new fields)  | ✓ (`plus`)         | ✗    | ✗    | ◐           | ✓       | ✓               | ✓       |
+| Forward references (any order) | ✓                  | ✗    | ✗    | ◐           | ✓       | ✓               | ✓       |
+| Inheritance / mixins           | ✗                  | ✗    | ✗    | ◐           | ✓       | ✓               | ✗       |
+| Self-references (within doc)   | ✓ (named bindings) | ✗    | ✗    | ✓ (anchors) | ✓       | ✓               | ✓       |
 
 ### B.6 Integration and Validation
 
-| Feature                       | UZON | JSON | TOML | YAML | Jsonnet | CUE | Dhall |
-| ----------------------------- | ---- | ---- | ---- | ---- | ------- | --- | ----- |
-| File imports                  | ✓    | ✗    | ✗    | ✗    | ✓       | ✓   | ✓     |
-| Hermetic imports (content-addressed) | ✗ | N/A | N/A | N/A | ✗     | ✗   | ✓     |
-| Environment variables         | ✓ (`env`) | ✗ | ✗ | ✗ | ◐ (ext vars) | ✓ | ✓     |
-| Schema validation             | ✓ (type system) | ext | ext | ext | ✗ | ✓ | ✓     |
-| Constraint refinements (e.g., `>0`, regex) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗     |
-| Default values                | ✓ (function params) | ✗ | ✗ | ✗ | ◐   | ✓   | ✗     |
+| Feature                                    | UZON                | JSON | TOML | YAML | Jsonnet      | CUE | Dhall |
+| ------------------------------------------ | ------------------- | ---- | ---- | ---- | ------------ | --- | ----- |
+| File imports                               | ✓                   | ✗    | ✗    | ✗    | ✓            | ✓   | ✓     |
+| Hermetic imports (content-addressed)       | ✗                   | N/A  | N/A  | N/A  | ✗            | ✗   | ✓     |
+| Environment variables                      | ✓ (`env`)           | ✗    | ✗    | ✗    | ◐ (ext vars) | ✓   | ✓     |
+| Schema validation                          | ✓ (type system)     | ext  | ext  | ext  | ✗            | ✓   | ✓     |
+| Constraint refinements (e.g., `>0`, regex) | ✗                   | ✗    | ✗    | ✗    | ✗            | ✓   | ✗     |
+| Default values                             | ✓ (function params) | ✗    | ✗    | ✗    | ◐            | ✓   | ✗     |
 
 ### B.7 Positioning
 
@@ -4081,93 +4250,93 @@ This appendix consolidates rules that are distributed across multiple sections i
 
 `null` is a **value** representing intentional absence. It is not `undefined`.
 
-| Context                                                  | Behavior                                                          | Reference   |
-| -------------------------------------------------------- | ----------------------------------------------------------------- | ----------- |
-| Binding                                                  | `x is null` — valid                                               | §3.1        |
-| Member access                                            | `null.foo` — **type error** (not undefined)                            | §5.12       |
-| `is` / `is not`                                          | Compatible with any type                                          | §5.2        |
-| `or else`                                                | Passes through (null is not undefined)                            | §5.7        |
-| `if`/`case` branches                                     | Compatible with any type across branches                          | §5.9, §5.10 |
-| `with` override                                          | Bidirectional — any→null, null→any                                | §3.2.1      |
-| List element                                             | Adopts type from non-null elements; all-null requires `as [Type]` | §3.4        |
-| `in` operator                                            | Exempt from type constraint on either side                        | §5.8.1      |
+| Context                                                  | Behavior                                                          | Reference                    |
+| -------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------- |
+| Binding                                                  | `x is null` — valid                                               | §3.1                         |
+| Member access                                            | `null.foo` — **type error** (not undefined)                       | §5.12                        |
+| `is` / `is not`                                          | Compatible with any type                                          | §5.2                         |
+| `or else`                                                | Passes through (null is not undefined)                            | §5.7                         |
+| `if`/`case` branches                                     | Compatible with any type across branches                          | §5.9, §5.10                  |
+| `with` override                                          | Bidirectional — any→null, null→any                                | §3.2.1                       |
+| List element                                             | Adopts type from non-null elements; all-null requires `as [Type]` | §3.4                         |
+| `in` operator                                            | Exempt from type constraint on either side                        | §5.8.1                       |
 | Arithmetic, comparison, concatenation, repetition, logic | **Type error**                                                    | §4.5, §5.3, §5.4, §5.6, §5.8 |
-| `to string`                                              | `"null"`                                                          | §5.11.2     |
-| `to null`                                                | Identity (permitted)                                              | §5.11.0     |
-| `to` any other type                                      | **Type error**                                                    | §5.11.0     |
+| `to string`                                              | `"null"`                                                          | §5.11.2                      |
+| `to null`                                                | Identity (permitted)                                              | §5.11.0                      |
+| `to` any other type                                      | **Type error**                                                    | §5.11.0                      |
 
 ### D.2 `undefined` Behavior Summary
 
 `undefined` is a **state** (not a value) resulting from accessing something that does not exist. Errors arising from `undefined` in operator contexts are **runtime errors** — they are suppressed in non-selected branches during speculative evaluation (§5.9), enabling patterns like `if x is undefined then 0 else x + 1`. There are two exceptions where the literal `undefined` produces a **type error** (§4.5) instead, always reported regardless of branch selection: `x is undefined` as a binding value, and `when undefined then ...` as a `case` match pattern.
 
-| Context                                   | Behavior                                           | Reference    |
-| ----------------------------------------- | -------------------------------------------------- | ------------ |
-| Binding                                   | `x is undefined` — **type error** (literal)        | §4.5         |
+| Context                                   | Behavior                                         | Reference    |
+| ----------------------------------------- | ------------------------------------------------ | ------------ |
+| Binding                                   | `x is undefined` — **type error** (literal)      | §4.5         |
 | Expressions producing undefined           | unbound name, `env.UNSET`, out-of-bounds — valid | §5.12, §5.13 |
-| `.` (member access)                       | Propagates                                         | §5.12        |
-| `of` (field extraction in binding)        | Propagates                                         | §5.14        |
-| `to` (conversion)                         | Propagates                                         | §5.11        |
-| `as` (annotation)                         | Propagates (type name still validated)             | §6.1         |
-| `or else`                                 | Returns right operand                              | §5.7         |
-| `is` / `is not`                           | Permitted (returns bool)                           | §5.2         |
-| Arithmetic (`+`, `-`, `*`, `/`, `%`, `^`) | **Runtime error**                                  | §5.3         |
-| Concatenation (`++`), repetition (`**`)   | **Runtime error**                                  | §3.1         |
-| Comparison (`<`, `<=`, `>`, `>=`)         | **Runtime error**                                  | §3.1         |
-| Logic (`and`, `or`, `not`)                | **Runtime error**                                  | §3.1         |
-| `in` (either operand)                     | **Runtime error**                                  | §5.8.1       |
-| `with`                                    | **Runtime error**                                  | §3.2.1       |
-| `plus`                                 | **Runtime error**                                  | §3.2.2       |
-| `is named`                                | **Runtime error**                                  | §3.7.2       |
-| `is type` / `is not type`                 | **Runtime error**                                  | §5.2         |
-| String interpolation                      | **Runtime error** (terminal context)               | §5.11.2      |
-| `case` match value                        | **Runtime error**                                  | §5.10        |
-| `when undefined then ...` (literal)       | **Type error** (literal, not matchable)            | §5.10, §4.5  |
-| `()` (function call)                      | **Runtime error**                                  | §3.1         |
+| `.` (member access)                       | Propagates                                       | §5.12        |
+| `of` (field extraction in binding)        | Propagates                                       | §5.14        |
+| `to` (conversion)                         | Propagates                                       | §5.11        |
+| `as` (annotation)                         | Propagates (type name still validated)           | §6.1         |
+| `or else`                                 | Returns right operand                            | §5.7         |
+| `is` / `is not`                           | Permitted (returns bool)                         | §5.2         |
+| Arithmetic (`+`, `-`, `*`, `/`, `%`, `^`) | **Runtime error**                                | §5.3         |
+| Concatenation (`++`), repetition (`**`)   | **Runtime error**                                | §3.1         |
+| Comparison (`<`, `<=`, `>`, `>=`)         | **Runtime error**                                | §3.1         |
+| Logic (`and`, `or`, `not`)                | **Runtime error**                                | §3.1         |
+| `in` (either operand)                     | **Runtime error**                                | §5.8.1       |
+| `with`                                    | **Runtime error**                                | §3.2.1       |
+| `plus`                                    | **Runtime error**                                | §3.2.2       |
+| `is named`                                | **Runtime error**                                | §3.7.2       |
+| `is type` / `is not type`                 | **Runtime error**                                | §5.2         |
+| String interpolation                      | **Runtime error** (terminal context)             | §5.11.2      |
+| `case` match value                        | **Runtime error**                                | §5.10        |
+| `when undefined then ...` (literal)       | **Type error** (literal, not matchable)          | §5.10, §4.5  |
+| `()` (function call)                      | **Runtime error**                                | §3.1         |
 
 ### D.3 Type Compatibility Rules
 
 "Same type" means **exactly the same** — `i32` ≠ `i64`, `u8` ≠ `i8`, `f32` ≠ `f64`.
 
-| Rule                                        | Where it applies                                                            | Reference                                     |
-| ------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------- |
-| Same numeric type required                  | Arithmetic, comparison                                                      | §5.3, §5.4                                    |
-| Untyped literal adopts typed operand's type | Everywhere same-type is required                                            | §5                                            |
-| `null` compatible with any type             | `is`/`is not`, `or else`, `if`/`case` branches, `with`, `in`, list elements | §5.2, §5.7, §5.9, §5.10, §3.2.1, §5.8.1, §3.4 |
-| Speculative evaluation for type checking    | `if`/`case` branches, `or else`, `and`/`or`                                 | §5.9                                          |
-| Structural compatibility for structs        | `with`, `plus`, `as NamedStructType` — field names + types must match    | §3.2.1, §3.2.2, §6.3                          |
-| Structural compatibility for unions         | Same member type set = same type (order irrelevant)                         | §3.6                                           |
-| Named type compatibility is nominal         | Named types (via standalone declaration or `called`) match by name, not structure | §3.2.1 rule (5), §6.2              |
+| Rule                                        | Where it applies                                                                  | Reference                                     |
+| ------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
+| Same numeric type required                  | Arithmetic, comparison                                                            | §5.3, §5.4                                    |
+| Untyped literal adopts typed operand's type | Everywhere same-type is required                                                  | §5                                            |
+| `null` compatible with any type             | `is`/`is not`, `or else`, `if`/`case` branches, `with`, `in`, list elements       | §5.2, §5.7, §5.9, §5.10, §3.2.1, §5.8.1, §3.4 |
+| Speculative evaluation for type checking    | `if`/`case` branches, `or else`, `and`/`or`                                       | §5.9                                          |
+| Structural compatibility for structs        | `with`, `plus`, `as NamedStructType` — field names + types must match             | §3.2.1, §3.2.2, §6.3                          |
+| Structural compatibility for unions         | Same member type set = same type (order irrelevant)                               | §3.6                                          |
+| Named type compatibility is nominal         | Named types (via standalone declaration or `called`) match by name, not structure | §3.2.1 rule (5), §6.2                         |
 
 ### D.4 Tagged Union Transparency
 
 Tagged unions are transparent for **most** operators but not all. Every expression-level operator is listed — an operator not listed here (if any) follows the default inner-value (transparent) behavior.
 
-| Operator                            | Sees                                     | Reference    |
-| ----------------------------------- | ---------------------------------------- | ------------ |
-| `.` (member access)                 | Inner value                              | §3.7.1       |
-| `()` (function call)                | Inner value (if callable)                | §3.7.1       |
-| Unary `-` (negation)                | Inner value                              | §3.7.1       |
-| Arithmetic (`+`, `-`, `*`, `/`, `%`) | Inner value                             | §3.7.1       |
-| Exponentiation (`^`)                | Inner value                              | §3.7.1       |
-| Concatenation (`++`)                | Inner value                              | §3.7.1       |
-| Repetition (`**`)                   | Inner value                              | §3.7.1       |
-| Ordered comparison (`<`,`<=`,`>`,`>=`) | Inner value (non-tagged RHS)          | §3.7.1, §5.4 |
-| Ordered comparison (two tagged)     | **Type error**                           | §5.4         |
-| Logical `and` / `or` / `not`        | Inner value (inner must be bool)         | §3.7.1       |
-| String interpolation (`{...}`)      | Inner value                              | §3.7.1       |
-| Comparison with non-tagged-union    | Inner value                              | §3.7.1, §5.4 |
-| `is` / `is not` (two tagged unions) | **Wrapper** (tag + inner value)          | §3.7.2       |
-| `is` / `is not` (tagged vs plain)   | **Type error** (except `null`/`undefined`) | §3.7.2, §5.2 |
-| `in`                                | **Wrapper** (same semantics as `is`)     | §5.8.1       |
-| `is named` / `is not named`         | **Wrapper** (checks tag)                 | §3.7.2       |
-| `case named`                        | **Wrapper** (checks tag)                 | §3.7.2       |
-| `to`                                | **Wrapper** (only `to string` permitted) | §5.11.0      |
-| `as`                                | **Wrapper** (type must match the tagged union) | §6.1   |
-| `is type` / `is not type`           | Inner value (checks inner value's type)  | §5.2         |
-| `case type`                         | Inner value (dispatches on inner type)   | §5.10        |
-| `or else`                           | **Wrapper** (checks for `undefined`)     | §5.7         |
-| `with`                              | **Type error** (requires struct)         | §3.2.1       |
-| `plus`                              | **Type error** (requires struct)         | §3.2.2       |
+| Operator                               | Sees                                           | Reference    |
+| -------------------------------------- | ---------------------------------------------- | ------------ |
+| `.` (member access)                    | Inner value                                    | §3.7.1       |
+| `()` (function call)                   | Inner value (if callable)                      | §3.7.1       |
+| Unary `-` (negation)                   | Inner value                                    | §3.7.1       |
+| Arithmetic (`+`, `-`, `*`, `/`, `%`)   | Inner value                                    | §3.7.1       |
+| Exponentiation (`^`)                   | Inner value                                    | §3.7.1       |
+| Concatenation (`++`)                   | Inner value                                    | §3.7.1       |
+| Repetition (`**`)                      | Inner value                                    | §3.7.1       |
+| Ordered comparison (`<`,`<=`,`>`,`>=`) | Inner value (non-tagged RHS)                   | §3.7.1, §5.4 |
+| Ordered comparison (two tagged)        | **Type error**                                 | §5.4         |
+| Logical `and` / `or` / `not`           | Inner value (inner must be bool)               | §3.7.1       |
+| String interpolation (`{...}`)         | Inner value                                    | §3.7.1       |
+| Comparison with non-tagged-union       | Inner value                                    | §3.7.1, §5.4 |
+| `is` / `is not` (two tagged unions)    | **Wrapper** (tag + inner value)                | §3.7.2       |
+| `is` / `is not` (tagged vs plain)      | **Type error** (except `null`/`undefined`)     | §3.7.2, §5.2 |
+| `in`                                   | **Wrapper** (same semantics as `is`)           | §5.8.1       |
+| `is named` / `is not named`            | **Wrapper** (checks tag)                       | §3.7.2       |
+| `case named`                           | **Wrapper** (checks tag)                       | §3.7.2       |
+| `to`                                   | **Wrapper** (only `to string` permitted)       | §5.11.0      |
+| `as`                                   | **Wrapper** (type must match the tagged union) | §6.1         |
+| `is type` / `is not type`              | Inner value (checks inner value's type)        | §5.2         |
+| `case type`                            | Inner value (dispatches on inner type)         | §5.10        |
+| `or else`                              | **Wrapper** (checks for `undefined`)           | §5.7         |
+| `with`                                 | **Type error** (requires struct)               | §3.2.1       |
+| `plus`                                 | **Type error** (requires struct)               | §3.2.2       |
 
 ### D.5 Speculative Evaluation
 
@@ -4182,12 +4351,12 @@ Reference: §5.9
 
 ### D.6 Error Classification
 
-| Category            | Examples                                                                                                                  | When                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| Syntax error        | Missing `else`, chained `is`, chained `plus`, duplicate bindings                                                       | Parsing                                |
-| Circular dependency | `a → b → a` in dependency graph                                                                                           | Static analysis (before evaluation)    |
+| Category            | Examples                                                                                                            | When                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Syntax error        | Missing `else`, chained `is`, chained `plus`, duplicate bindings                                                    | Parsing                                |
+| Circular dependency | `a → b → a` in dependency graph                                                                                     | Static analysis (before evaluation)    |
 | Type error          | Mismatched branch types, incompatible `with`/`plus` override, `plus` with no new fields, disallowed `to` conversion | Type checking (speculative evaluation) |
-| Runtime error       | Division by zero, integer overflow, `inf to i32`, out-of-range `to` conversion                                            | Evaluation                             |
+| Runtime error       | Division by zero, integer overflow, `inf to i32`, out-of-range `to` conversion                                      | Evaluation                             |
 
 Error priority: syntax → circular → type → runtime (§11.2).
 
@@ -4206,24 +4375,24 @@ All three compound variant types share the same minimum-2 rule for the same reas
 
 Functions are **values** — they follow the same binding rules as all other values.
 
-| Rule                             | Description                                                                                                             | Reference    |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------ |
-| Functions are values             | Bound with `is`, stored in lists, passed as arguments                                                                   | §3.8         |
-| Zero parameters permitted        | `function returns type { ... }` is valid — useful for deferred computation                                              | §3.8         |
-| Parameter access is bare         | Parameters and local bindings use bare identifiers — visible in nested structs and string interpolation     | §3.8, §4.4.1 |
-| Parameter types required         | When parameters are present, every parameter **MUST** have explicit `as` type annotation                                | §3.8         |
-| Default parameters trailing      | Parameters with `default` **MUST** appear after all required parameters                                                 | §3.8         |
-| Last expression is return value  | No `return` keyword — last expression in body is the result                                                             | §3.8         |
-| No recursion                     | Call graph **MUST** be a DAG — static cycle detection                                                                   | §3.8         |
-| Self-exclusion applies           | `x` inside function `x` skips the function binding, searches parent                                                | §3.8, §5.12  |
-| Function body is a scope layer   | Nested struct walks: struct → function body (params + locals) → enclosing → file                            | §3.8         |
-| No side effects                  | Pure — may read scope and `env`, cannot modify bindings or perform I/O                                                 | §3.8         |
-| No function equality             | Comparing functions with `is`/`is not` or ordering with `<`/`<=`/`>`/`>=` is a type error                               | §3.8         |
-| `called` names function types    | Captures parameter types + return type as a named type                                                                  | §3.8         |
-| Type compatibility is structural | Same parameter types (in order) + same return type = compatible for `as`                                                | §3.8         |
-| Named function types are nominal | Two separately `called` function types with same signature are different                                                | §3.8, §3.2.1 |
+| Rule                             | Description                                                                                                                                                                                                                                             | Reference    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Functions are values             | Bound with `is`, stored in lists, passed as arguments                                                                                                                                                                                                   | §3.8         |
+| Zero parameters permitted        | `function returns type { ... }` is valid — useful for deferred computation                                                                                                                                                                              | §3.8         |
+| Parameter access is bare         | Parameters and local bindings use bare identifiers — visible in nested structs and string interpolation                                                                                                                                                 | §3.8, §4.4.1 |
+| Parameter types required         | When parameters are present, every parameter **MUST** have explicit `as` type annotation                                                                                                                                                                | §3.8         |
+| Default parameters trailing      | Parameters with `default` **MUST** appear after all required parameters                                                                                                                                                                                 | §3.8         |
+| Last expression is return value  | No `return` keyword — last expression in body is the result                                                                                                                                                                                             | §3.8         |
+| No recursion                     | Call graph **MUST** be a DAG — static cycle detection                                                                                                                                                                                                   | §3.8         |
+| Self-exclusion applies           | `x` inside function `x` skips the function binding, searches parent                                                                                                                                                                                     | §3.8, §5.12  |
+| Function body is a scope layer   | Nested struct walks: struct → function body (params + locals) → enclosing → file                                                                                                                                                                        | §3.8         |
+| No side effects                  | Pure — may read scope and `env`, cannot modify bindings or perform I/O                                                                                                                                                                                  | §3.8         |
+| No function equality             | Comparing functions with `is`/`is not` or ordering with `<`/`<=`/`>`/`>=` is a type error                                                                                                                                                               | §3.8         |
+| `called` names function types    | Captures parameter types + return type as a named type                                                                                                                                                                                                  | §3.8         |
+| Type compatibility is structural | Same parameter types (in order) + same return type = compatible for `as`                                                                                                                                                                                | §3.8         |
+| Named function types are nominal | Two separately `called` function types with same signature are different                                                                                                                                                                                | §3.8, §3.2.1 |
 | `std` is an implicit binding     | Not a keyword — provides `len`, `reverse`, `get`, `hasKey`, `keys`, `values`, `all`, `any`, `filter`, `map`, `reduce`, `sort`, `isNan`, `isInf`, `isFinite`, `contains`, `endsWith`, `join`, `lower`, `replace`, `split`, `startsWith`, `trim`, `upper` | §5.16        |
-| `std` functions are pure         | Produce new values, guaranteed to terminate                                                                             | §5.16        |
+| `std` functions are pure         | Produce new values, guaranteed to terminate                                                                                                                                                                                                             | §5.16        |
 
 ---
 
@@ -4235,14 +4404,14 @@ This appendix provides recommended conventions for writing readable, consistent 
 
 UZON uses the following naming conventions:
 
-| Kind                                  | Convention   | Example                              |
-| ------------------------------------- | ------------ | ------------------------------------ |
-| Type names (standalone or `called`)   | `PascalCase` | `LogLevel`, `Point3D`, `SecureBase`  |
-| Binding names                         | `snake_case` | `base_port`, `active_scope`          |
+| Kind                                  | Convention   | Example                                      |
+| ------------------------------------- | ------------ | -------------------------------------------- |
+| Type names (standalone or `called`)   | `PascalCase` | `LogLevel`, `Point3D`, `SecureBase`          |
+| Binding names                         | `snake_case` | `base_port`, `active_scope`                  |
 | Binding names (type declarations)     | `PascalCase` | `Point is struct { ... }`, `RGB is enum ...` |
-| Function names                        | `camelCase`  | `formatTarget`, `angularDistance`    |
-| Functions returning a type (`called`) | `PascalCase` | follows the type convention          |
-| Enum variants                         | `snake_case` | `red`, `hydrogen_alpha`, `dark_mode` |
+| Function names                        | `camelCase`  | `formatTarget`, `angularDistance`            |
+| Functions returning a type (`called`) | `PascalCase` | follows the type convention                  |
+| Enum variants                         | `snake_case` | `red`, `hydrogen_alpha`, `dark_mode`         |
 
 Acronyms and abbreviations lose their casing in identifiers: `XmlParser`, `HttpPort`, `HtmlConfig` — not `XMLParser`, `HTTPPort`, `HTMLConfig`.
 
@@ -4411,6 +4580,16 @@ tracking is true                 // equatorial mount enabled
 
 ## Appendix F: Version History
 
+### v0.11
+
+Editorial revisions — no normative semantic changes; v0.10-conforming implementations remain conforming.
+
+**§1 Introduction restructured** — Six distinguishing properties replace the earlier Design Goals bullets: natural-language readability, scale-continuity, modular decomposition, direct correspondence with typed programming languages, deterministic evaluation, and an unambiguous syntactic surface. Keyword role summary and notation conventions move to §1.7 and §1.8.
+
+**Critique of other formats removed from normative sections** — Comparative references to JSON/YAML/TOML/Jsonnet/CUE/Dhall/Nix now live only in Appendix B; §1 presents UZON's properties in positive form and links there for comparison.
+
+**Spec-wide table realignment** — All 42 tables re-aligned so each column's cells share a uniform width. No table content changed — only whitespace padding and separator-row dashes.
+
 ### v0.10
 
 Three expressiveness features added based on real-world configuration file feedback:
@@ -4429,4 +4608,4 @@ Initial pre-release specification.
 
 ---
 
-*End of UZON Specification v0.10*
+*End of UZON Specification v0.11*
